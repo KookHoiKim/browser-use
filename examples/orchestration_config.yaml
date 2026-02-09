@@ -1,0 +1,225 @@
+# Multi-Agent Orchestration Configuration
+# This file configures the orchestration layer for browser-use multi-agent system
+
+# LLM Provider Configuration
+# Supports: openai, azure, anthropic, vllm, google, groq
+llm_providers:
+  # vLLM Provider (Local Model Server)
+  - name: vllm_qwen
+    provider_type: vllm
+    model_name: Qwen3VL_32b
+    api_base: http://127.0.0.1:3333/v1
+    api_key: EMPTY  # vLLM often doesn't require authentication
+    temperature: 0.7
+    max_tokens: 4096
+    timeout: 120
+    max_retries: 3
+    proxy:
+      enabled: false
+
+  # Azure GPT Provider (with Proxy Support)
+  - name: azure_gpt4
+    provider_type: azure
+    model_name: gpt-4
+    azure_deployment: ${AZURE_DEPLOYMENT_NAME}  # Environment variable
+    api_key: ${AZURE_API_KEY}
+    api_base: ${AZURE_API_BASE}
+    api_version: "2024-02-15-preview"
+    temperature: 0.7
+    max_tokens: 4096
+    timeout: 120
+    max_retries: 3
+    proxy:
+      enabled: true
+      http_proxy: http://127.0.0.1:9090
+      https_proxy: http://127.0.0.1:9090
+      no_proxy:
+        - localhost
+        - 127.0.0.1
+
+  # OpenAI Provider (Fallback)
+  - name: openai_gpt4
+    provider_type: openai
+    model_name: gpt-4o
+    api_key: ${OPENAI_API_KEY}
+    temperature: 0.7
+    max_tokens: 4096
+    timeout: 120
+    max_retries: 3
+    proxy:
+      enabled: false
+
+# Agent Configuration
+# Each agent has a specific role and capabilities
+agents:
+  # Coordinator Agent - High-level task planning and delegation
+  - name: coordinator
+    role: coordinator
+    description: "Coordinates tasks across multiple agents, breaks down complex goals into subtasks, and delegates work to specialized agents"
+    llm_provider: azure_gpt4  # Use Azure GPT-4 for coordinator
+    capabilities:
+      - name: task_decomposition
+        description: "Break complex tasks into smaller subtasks"
+        parameters:
+          max_subtasks: 10
+      - name: agent_selection
+        description: "Select appropriate agents for subtasks"
+      - name: progress_monitoring
+        description: "Monitor overall progress and handle failures"
+    system_prompt: |
+      You are a coordinator agent responsible for breaking down complex web automation tasks
+      and delegating them to specialized agents. Analyze the goal, create a plan, and assign
+      work to the most appropriate agent for each subtask.
+    include_browser_actions: false
+    max_steps: 50
+    max_retry_attempts: 3
+    timeout: 600
+    can_delegate: true
+    can_receive_delegations: false
+    delegation_roles:
+      - planner
+      - researcher
+      - navigator
+      - form_filler
+      - data_extractor
+      - validator
+
+  # Planner Agent - Strategic planning and workflow design
+  - name: planner
+    role: planner
+    description: "Creates detailed execution plans for web automation tasks"
+    llm_provider: vllm_qwen  # Use local vLLM for planner
+    capabilities:
+      - name: workflow_design
+        description: "Design multi-step workflows"
+      - name: risk_assessment
+        description: "Identify potential issues in plans"
+    system_prompt: |
+      You are a planner agent specialized in creating detailed execution plans for web tasks.
+      Analyze requirements, identify necessary steps, and create structured plans that other
+      agents can follow.
+    include_browser_actions: true
+    max_steps: 100
+    max_retry_attempts: 3
+    timeout: 300
+    can_delegate: true
+    can_receive_delegations: true
+    delegation_roles:
+      - researcher
+      - navigator
+
+  # Researcher Agent - Information gathering and analysis
+  - name: researcher
+    role: researcher
+    description: "Searches, reads, and analyzes web content to gather information"
+    llm_provider: vllm_qwen
+    capabilities:
+      - name: content_extraction
+        description: "Extract relevant information from web pages"
+      - name: pattern_recognition
+        description: "Identify patterns and structures in data"
+    system_prompt: |
+      You are a researcher agent specialized in gathering and analyzing web content.
+      Navigate pages, extract relevant information, and synthesize findings.
+    include_browser_actions: true
+    max_steps: 150
+    max_retry_attempts: 3
+    timeout: 300
+    can_delegate: false
+    can_receive_delegations: true
+
+  # Navigator Agent - Page navigation and element interaction
+  - name: navigator
+    role: navigator
+    description: "Navigates web pages, clicks links, and interacts with UI elements"
+    llm_provider: vllm_qwen
+    capabilities:
+      - name: element_location
+        description: "Find and interact with page elements"
+      - name: page_traversal
+        description: "Navigate through multi-page flows"
+    system_prompt: |
+      You are a navigator agent specialized in web page navigation and element interaction.
+      Find elements, click buttons, follow links, and navigate complex page structures.
+    include_browser_actions: true
+    max_steps: 200
+    max_retry_attempts: 5
+    timeout: 300
+    can_delegate: false
+    can_receive_delegations: true
+
+  # Form Filler Agent - Form completion and submission
+  - name: form_filler
+    role: form_filler
+    description: "Fills out web forms with provided data and handles submissions"
+    llm_provider: vllm_qwen
+    capabilities:
+      - name: form_understanding
+        description: "Understand form structure and requirements"
+      - name: data_validation
+        description: "Validate input data before submission"
+    system_prompt: |
+      You are a form filler agent specialized in completing web forms.
+      Understand form fields, fill them with appropriate data, handle validation,
+      and submit forms correctly.
+    include_browser_actions: true
+    max_steps: 100
+    max_retry_attempts: 3
+    timeout: 300
+    can_delegate: false
+    can_receive_delegations: true
+
+  # Data Extractor Agent - Structured data extraction
+  - name: data_extractor
+    role: data_extractor
+    description: "Extracts structured data from web pages into usable formats"
+    llm_provider: vllm_qwen
+    capabilities:
+      - name: structure_detection
+        description: "Detect data structures like tables, lists, etc."
+      - name: data_formatting
+        description: "Format extracted data into JSON/CSV"
+    system_prompt: |
+      You are a data extractor agent specialized in extracting structured data.
+      Identify data patterns, extract information systematically, and format output
+      in structured formats.
+    include_browser_actions: true
+    max_steps: 100
+    max_retry_attempts: 3
+    timeout: 300
+    can_delegate: false
+    can_receive_delegations: true
+
+  # Validator Agent - Quality assurance and verification
+  - name: validator
+    role: validator
+    description: "Validates task completion and verifies results meet requirements"
+    llm_provider: azure_gpt4
+    capabilities:
+      - name: result_verification
+        description: "Verify task results match expectations"
+      - name: quality_assessment
+        description: "Assess quality of completed work"
+    system_prompt: |
+      You are a validator agent specialized in quality assurance.
+      Verify that tasks were completed correctly, check for errors,
+      and ensure results meet specified requirements.
+    include_browser_actions: true
+    max_steps: 50
+    max_retry_attempts: 2
+    timeout: 300
+    can_delegate: false
+    can_receive_delegations: true
+
+# Orchestration Settings
+coordinator_agent: null  # Will use first agent (coordinator) if not specified
+max_concurrent_agents: 3  # Maximum number of agents executing simultaneously
+enable_agent_communication: true
+communication_protocol: coordinator  # Options: direct, broadcast, coordinator
+
+# Task Management
+enable_task_queue: true
+task_retry_delay: 2.0  # Seconds to wait before retrying failed tasks
+
+# Browser Settings
+shared_browser: false  # If false, each agent gets its own browser instance
