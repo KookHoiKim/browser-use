@@ -1,0 +1,40 @@
+# Planner + researcher + extractor for multi-step data workflows
+llm_providers:
+  - name: openai_fast
+    provider_type: openai
+    model_name: gpt-4o-mini
+    api_key: ${OPENAI_API_KEY}
+    temperature: 0.4
+    max_tokens: 2048
+
+agents:
+  - name: planner
+    role: planner
+    description: "Creates execution plans for data collection"
+    llm_provider: openai_fast
+    system_prompt: |
+      You are a planner agent. Provide structured steps for data collection tasks.
+    include_browser_actions: false
+    max_steps: 50
+
+  - name: researcher
+    role: researcher
+    description: "Locates and reviews content sources"
+    llm_provider: openai_fast
+    system_prompt: |
+      You are a researcher agent. Find relevant sources and summarize key points.
+    include_browser_actions: true
+    max_steps: 140
+
+  - name: data_extractor
+    role: data_extractor
+    description: "Extracts structured data from pages"
+    llm_provider: openai_fast
+    system_prompt: |
+      You are a data extractor agent. Extract structured information and format it clearly.
+    include_browser_actions: true
+    max_steps: 120
+
+max_concurrent_agents: 2
+enable_agent_communication: true
+shared_browser: false

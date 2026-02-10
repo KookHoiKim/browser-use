@@ -33,6 +33,7 @@ from browser_use.orchestration.views import (
 	OrchestrationConfig,
 	OrchestrationState,
 	ProxyConfig,
+	SequenceConfig,
 	TaskConfig,
 	TaskPriority,
 	TaskResult,
@@ -54,6 +55,7 @@ __all__ = [
 	'TaskConfig',
 	'ProxyConfig',
 	'AgentCapability',
+	'SequenceConfig',
 	# Enums
 	'AgentRole',
 	'AgentStatus',

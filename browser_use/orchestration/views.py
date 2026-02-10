@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from uuid_extensions import uuid7str
 
 
@@ -145,6 +145,26 @@ class AgentConfig(BaseModel):
 	)
 
 
+class SequenceConfig(BaseModel):
+	"""Configuration for running tasks through a fixed agent sequence."""
+
+	model_config = ConfigDict(extra='forbid', validate_assignment=True)
+
+	enabled: bool = Field(False, description='Enable sequential agent execution')
+	steps: list[str] = Field(
+		default_factory=list,
+		description='Ordered list of agent names to execute for each task',
+	)
+	pass_context: bool = Field(
+		True,
+		description='Pass prior sequence results into subsequent agent context',
+	)
+	stop_on_failure: bool = Field(
+		True,
+		description='Stop sequence execution on first non-success stage',
+	)
+
+
 class TaskConfig(BaseModel):
 	"""Configuration for a task in the orchestration system."""
 
@@ -188,6 +208,10 @@ class OrchestrationConfig(BaseModel):
 	shared_browser: bool = Field(
 		False, description='Whether agents share a single browser instance'
 	)
+	sequence: SequenceConfig = Field(
+		default_factory=SequenceConfig,
+		description='Optional sequential execution configuration',
+	)
 
 	@field_validator('agents')
 	@classmethod
@@ -206,6 +230,26 @@ class OrchestrationConfig(BaseModel):
 		if len(names) != len(set(names)):
 			raise ValueError('LLM provider names must be unique')
 		return v
+
+	@model_validator(mode='after')
+	def validate_sequence(self) -> 'OrchestrationConfig':
+		"""Validate sequence configuration against available agents."""
+		if self.sequence.steps and not self.sequence.enabled:
+			self.sequence.enabled = True
+
+		if self.sequence.enabled:
+			if not self.sequence.steps:
+				raise ValueError('Sequence mode enabled but no sequence steps provided')
+
+			agent_names = {agent.name for agent in self.agents}
+			missing = [name for name in self.sequence.steps if name not in agent_names]
+			if missing:
+				raise ValueError(f'Sequence steps reference unknown agents: {missing}')
+
+			if len(self.sequence.steps) != len(set(self.sequence.steps)):
+				raise ValueError('Sequence steps must be unique')
+
+		return self
 
 
 class AgentMessage(BaseModel):

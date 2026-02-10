@@ -14,8 +14,10 @@ Usage:
 	python examples/multi_agent_orchestration.py
 """
 
+import argparse
 import asyncio
 import logging
+import os
 from pathlib import Path
 
 from browser_use.orchestration import (
@@ -34,13 +36,22 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def simple_example():
+def _resolve_config_path(config_path: str | None) -> Path:
+	"""Resolve orchestration config path from args or environment."""
+	if config_path:
+		return Path(config_path)
+	env_path = os.getenv('BROWSER_USE_ORCHESTRATION_CONFIG')
+	if env_path:
+		return Path(env_path)
+	return Path(__file__).parent / 'orchestration_config.yaml'
+
+
+async def simple_example(config_path: str | None = None):
 	"""Simple orchestration example with predefined tasks."""
 	logger.info('=== Simple Multi-Agent Orchestration Example ===')
 
 	# Load configuration from YAML
-	config_path = Path(__file__).parent / 'orchestration_config.yaml'
-	config = ConfigLoader.load_config(config_path)
+	config = ConfigLoader.load_config(_resolve_config_path(config_path))
 
 	# Create orchestrator
 	orchestrator = Orchestrator(config)
@@ -86,13 +97,12 @@ async def simple_example():
 		await orchestrator.shutdown()
 
 
-async def complex_example():
+async def complex_example(config_path: str | None = None):
 	"""Complex orchestration with task dependencies and role-based assignment."""
 	logger.info('=== Complex Multi-Agent Orchestration Example ===')
 
 	# Load configuration
-	config_path = Path(__file__).parent / 'orchestration_config.yaml'
-	config = ConfigLoader.load_config(config_path)
+	config = ConfigLoader.load_config(_resolve_config_path(config_path))
 
 	# Create orchestrator
 	orchestrator = Orchestrator(config)
@@ -152,13 +162,12 @@ async def complex_example():
 		await orchestrator.shutdown()
 
 
-async def event_driven_example():
+async def event_driven_example(config_path: str | None = None):
 	"""Example showing event-driven coordination with custom event handlers."""
 	logger.info('=== Event-Driven Multi-Agent Orchestration Example ===')
 
 	# Load configuration
-	config_path = Path(__file__).parent / 'orchestration_config.yaml'
-	config = ConfigLoader.load_config(config_path)
+	config = ConfigLoader.load_config(_resolve_config_path(config_path))
 
 	# Create orchestrator
 	orchestrator = Orchestrator(config)
@@ -290,26 +299,38 @@ async def custom_agent_example():
 		await orchestrator.shutdown()
 
 
+def _parse_args() -> argparse.Namespace:
+	parser = argparse.ArgumentParser(description='Run multi-agent orchestration examples.')
+	parser.add_argument(
+		'example',
+		nargs='?',
+		default='simple',
+		choices=['simple', 'complex', 'events', 'custom'],
+		help='Example scenario to run.',
+	)
+	parser.add_argument(
+		'--config',
+		help='Path to orchestration config YAML (overrides BROWSER_USE_ORCHESTRATION_CONFIG).',
+	)
+	return parser.parse_args()
+
+
 def main():
 	"""Main entry point."""
-	import sys
-
-	if len(sys.argv) > 1:
-		example_type = sys.argv[1]
-	else:
-		example_type = 'simple'
-
+	args = _parse_args()
+	example_type = args.example
+	config_path = args.config
 	examples = {
-		'simple': simple_example,
-		'complex': complex_example,
-		'events': event_driven_example,
+		'simple': lambda: simple_example(config_path),
+		'complex': lambda: complex_example(config_path),
+		'events': lambda: event_driven_example(config_path),
 		'custom': custom_agent_example,
 	}
 
 	if example_type not in examples:
 		print(f'Unknown example type: {example_type}')
 		print(f'Available examples: {", ".join(examples.keys())}')
-		sys.exit(1)
+		raise SystemExit(1)
 
 	logger.info(f'Running {example_type} example...')
 	asyncio.run(examples[example_type]())

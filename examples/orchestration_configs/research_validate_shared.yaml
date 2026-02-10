@@ -1,0 +1,31 @@
+# Parallel research and validation with a shared browser
+llm_providers:
+  - name: openai_balanced
+    provider_type: openai
+    model_name: gpt-4o
+    api_key: ${OPENAI_API_KEY}
+    temperature: 0.5
+    max_tokens: 3072
+
+agents:
+  - name: researcher
+    role: researcher
+    description: "Gathers and summarizes information from web sources"
+    llm_provider: openai_balanced
+    system_prompt: |
+      You are a researcher agent. Gather information and provide structured summaries.
+    include_browser_actions: true
+    max_steps: 150
+
+  - name: validator
+    role: validator
+    description: "Checks results for accuracy and completeness"
+    llm_provider: openai_balanced
+    system_prompt: |
+      You are a validator agent. Verify outputs, identify gaps, and confirm accuracy.
+    include_browser_actions: true
+    max_steps: 80
+
+max_concurrent_agents: 2
+enable_agent_communication: true
+shared_browser: true

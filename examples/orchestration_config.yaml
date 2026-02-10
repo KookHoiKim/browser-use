@@ -223,3 +223,14 @@ task_retry_delay: 2.0  # Seconds to wait before retrying failed tasks
 
 # Browser Settings
 shared_browser: false  # If false, each agent gets its own browser instance
+
+# Sequence Settings (optional)
+# When enabled, each task is executed by the listed agents in order.
+sequence:
+  enabled: false
+  steps:
+    - planner
+    - navigator
+    - data_extractor
+  pass_context: true
+  stop_on_failure: true

@@ -276,6 +276,51 @@ class TestOrchestrationConfig:
 				agents=[agent1, agent2],
 			)
 
+	def test_sequence_validation_unknown_agent(self):
+		"""Test that sequence steps must reference known agents."""
+		provider = LLMProviderConfig(
+			name='provider',
+			provider_type=LLMProviderType.OPENAI,
+			model_name='gpt-4o',
+		)
+
+		agent = AgentConfig(
+			name='navigator',
+			role=AgentRole.NAVIGATOR,
+			description='Test',
+			llm_provider='provider',
+		)
+
+		with pytest.raises(ValueError, match='Sequence steps reference unknown agents'):
+			OrchestrationConfig(
+				llm_providers=[provider],
+				agents=[agent],
+				sequence={'enabled': True, 'steps': ['missing_agent']},
+			)
+
+	def test_sequence_auto_enable(self):
+		"""Test that providing steps auto-enables sequence mode."""
+		provider = LLMProviderConfig(
+			name='provider',
+			provider_type=LLMProviderType.OPENAI,
+			model_name='gpt-4o',
+		)
+
+		agent = AgentConfig(
+			name='navigator',
+			role=AgentRole.NAVIGATOR,
+			description='Test',
+			llm_provider='provider',
+		)
+
+		config = OrchestrationConfig(
+			llm_providers=[provider],
+			agents=[agent],
+			sequence={'steps': ['navigator']},
+		)
+
+		assert config.sequence.enabled
+
 
 class TestConfigLoader:
 	"""Tests for ConfigLoader."""
