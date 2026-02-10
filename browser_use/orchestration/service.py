@@ -73,6 +73,52 @@ class Orchestrator:
 		self._running = False
 		self._worker_tasks: list[asyncio.Task[Any]] = []
 
+	def _resolve_sequence_agents(self) -> list[ManagedAgent]:
+		"""Resolve configured sequence agents by name."""
+		return [
+			self.agent_registry.get_agent_by_name(agent_name)
+			for agent_name in self.config.sequence.steps
+		]
+
+	@staticmethod
+	def _format_sequence_stage_result(
+		stage_result: TaskResult, stage_index: int, agent: ManagedAgent
+	) -> dict[str, Any]:
+		"""Format a sequence stage result for output metadata."""
+		return {
+			'stage': stage_index,
+			'agent_id': agent.id,
+			'agent_name': agent.config.name,
+			'agent_role': agent.config.role.value,
+			'status': stage_result.status,
+			'output': stage_result.output,
+			'error': stage_result.error,
+			'execution_time': stage_result.execution_time,
+			'steps_taken': stage_result.steps_taken,
+		}
+
+	@staticmethod
+	def _build_sequence_context(
+		base_context: dict[str, Any],
+		stage_result: TaskResult,
+		agent: ManagedAgent,
+	) -> dict[str, Any]:
+		"""Build context for the next sequence stage."""
+		next_context = dict(base_context)
+		sequence_history = list(next_context.get('sequence_history', []))
+		sequence_history.append(
+			{
+				'agent_id': agent.id,
+				'agent_name': agent.config.name,
+				'agent_role': agent.config.role.value,
+				'status': stage_result.status,
+				'output': stage_result.output,
+				'error': stage_result.error,
+			}
+		)
+		next_context['sequence_history'] = sequence_history
+		return next_context
+
 	async def initialize(self) -> None:
 		"""Initialize orchestrator: load LLM providers, register agents, and set up browser."""
 		logger.info('Initializing orchestrator...')
@@ -230,6 +276,7 @@ class Orchestrator:
 				status='success' if not has_error else 'partial',
 				output={
 					'result': str(result),
+					'final_result': result.final_result(),
 					'steps_taken': len(result),
 					'success': not has_error,
 				},
@@ -267,6 +314,102 @@ class Orchestrator:
 			# Reset agent status
 			await self.agent_registry.update_agent_status(agent.id, AgentStatus.IDLE)
 			agent.current_task_id = None
+
+	async def _execute_sequence_task(self, task: TaskConfig) -> TaskResult:
+		"""Execute a task through the configured agent sequence.
+
+		Args:
+			task: Task to execute
+
+		Returns:
+			Aggregated TaskResult for the sequence
+		"""
+		sequence_agents = self._resolve_sequence_agents()
+		start_time = time.time()
+		sequence_context = dict(task.context)
+		sequence_results: list[dict[str, Any]] = []
+		total_steps = 0
+		final_agent_id = sequence_agents[0].id
+		overall_status: str = 'success'
+		last_error: str | None = None
+
+		for index, agent in enumerate(sequence_agents, start=1):
+			stage_task = TaskConfig(
+				description=task.description,
+				assigned_agent=agent.id,
+				priority=task.priority,
+				dependencies=task.dependencies,
+				context=sequence_context,
+				max_retries=task.max_retries,
+			)
+			stage_result = await self._execute_task(stage_task, agent)
+			sequence_results.append(
+				self._format_sequence_stage_result(stage_result, index, agent)
+			)
+			total_steps += stage_result.steps_taken
+			final_agent_id = agent.id
+			last_error = stage_result.error
+
+			if stage_result.status == 'failure':
+				overall_status = 'failure'
+				if self.config.sequence.stop_on_failure:
+					break
+			elif stage_result.status == 'partial' and overall_status != 'failure':
+				overall_status = 'partial'
+
+			if self.config.sequence.pass_context:
+				sequence_context = self._build_sequence_context(
+					sequence_context, stage_result, agent
+				)
+
+		execution_time = time.time() - start_time
+		final_output = sequence_results[-1]['output'] if sequence_results else {}
+
+		return TaskResult(
+			task_id=task.id,
+			agent_id=final_agent_id,
+			status=overall_status,
+			output={
+				'sequence_results': sequence_results,
+				'final_result': final_output,
+			},
+			error=last_error if overall_status != 'success' else None,
+			execution_time=execution_time,
+			steps_taken=total_steps,
+			metadata={
+				'sequence_agents': [agent.config.name for agent in sequence_agents],
+				'sequence_enabled': True,
+			},
+		)
+
+	async def _run_sequence(self, tasks: list[TaskConfig]) -> None:
+		"""Run tasks sequentially through the configured agent order."""
+		for task in tasks:
+			self.state.pending_tasks.append(task.id)
+
+		for task in tasks:
+			retries_left = task.max_retries
+			result: TaskResult | None = None
+
+			while True:
+				result = await self._execute_sequence_task(task)
+				if result.status == 'success':
+					break
+				if retries_left > 0:
+					retries_left -= 1
+					task.max_retries = retries_left
+					await asyncio.sleep(self.config.task_retry_delay)
+					continue
+				break
+
+			assert result is not None
+			self.state.results.append(result)
+			self.state.pending_tasks.remove(task.id)
+
+			if result.status == 'success':
+				self.state.completed_tasks.append(task.id)
+			else:
+				self.state.failed_tasks.append(task.id)
 
 	async def _task_worker(self) -> None:
 		"""Worker coroutine that processes tasks from the queue."""
@@ -470,28 +613,36 @@ class Orchestrator:
 			)
 		)
 
-		# Add tasks to queue
-		if tasks:
-			for task in tasks:
-				await self.add_task(task)
-
-		# Start worker tasks
-		num_workers = min(self.config.max_concurrent_agents, 3)
-		for _ in range(num_workers):
-			worker = asyncio.create_task(self._task_worker())
-			self._worker_tasks.append(worker)
-
-		logger.info(f'Started {num_workers} task workers')
-
-		# Wait for all tasks to complete
 		try:
-			while self._running:
-				# Check if all tasks are done
-				if not self.task_queue and not self.active_tasks:
-					logger.info('All tasks completed, stopping orchestration')
-					break
+			if self.config.sequence.enabled:
+				logger.info('Running orchestration in sequence mode')
+				sequence_tasks = tasks or list(self.task_queue)
+				self.task_queue.clear()
+				if sequence_tasks:
+					await self._run_sequence(sequence_tasks)
+				logger.info('Sequence execution complete')
+			else:
+				# Add tasks to queue
+				if tasks:
+					for task in tasks:
+						await self.add_task(task)
 
-				await asyncio.sleep(1.0)
+				# Start worker tasks
+				num_workers = min(self.config.max_concurrent_agents, 3)
+				for _ in range(num_workers):
+					worker = asyncio.create_task(self._task_worker())
+					self._worker_tasks.append(worker)
+
+				logger.info(f'Started {num_workers} task workers')
+
+				# Wait for all tasks to complete
+				while self._running:
+					# Check if all tasks are done
+					if not self.task_queue and not self.active_tasks:
+						logger.info('All tasks completed, stopping orchestration')
+						break
+
+					await asyncio.sleep(1.0)
 
 		except KeyboardInterrupt:
 			logger.info('Orchestration interrupted by user')

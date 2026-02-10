@@ -154,6 +154,24 @@ class AgentRegistry:
 			raise KeyError(f'Agent not found: {agent_id}. Available: {list(self._agents.keys())}')
 		return self._agents[agent_id]
 
+	def get_agent_by_name(self, agent_name: str) -> ManagedAgent:
+		"""Get agent by name.
+
+		Args:
+			agent_name: Agent name
+
+		Returns:
+			ManagedAgent instance
+
+		Raises:
+			KeyError: If agent not found
+		"""
+		for agent in self._agents.values():
+			if agent.config.name == agent_name:
+				return agent
+		available = [agent.config.name for agent in self._agents.values()]
+		raise KeyError(f'Agent not found: {agent_name}. Available: {available}')
+
 	def get_agents_by_role(self, role: AgentRole) -> list[ManagedAgent]:
 		"""Get all agents with a specific role.
 

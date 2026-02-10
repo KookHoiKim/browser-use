@@ -1,0 +1,39 @@
+# Sequence-driven planner → navigator flow
+llm_providers:
+  - name: openai_fast
+    provider_type: openai
+    model_name: gpt-4o-mini
+    api_key: ${OPENAI_API_KEY}
+    temperature: 0.3
+    max_tokens: 2048
+
+agents:
+  - name: planner
+    role: planner
+    description: "Breaks tasks into precise navigation steps"
+    llm_provider: openai_fast
+    system_prompt: |
+      You are a planner agent. Provide a clear step-by-step web plan for the task
+      and highlight any assumptions or required inputs.
+    include_browser_actions: false
+    max_steps: 40
+
+  - name: navigator
+    role: navigator
+    description: "Executes the plan on the web"
+    llm_provider: openai_fast
+    system_prompt: |
+      You are a navigator agent. Follow the provided plan and execute actions on the page.
+    include_browser_actions: true
+    max_steps: 120
+
+max_concurrent_agents: 1
+shared_browser: false
+
+sequence:
+  enabled: true
+  steps:
+    - planner
+    - navigator
+  pass_context: true
+  stop_on_failure: true

@@ -92,7 +92,21 @@ agents:
 max_concurrent_agents: 3
 enable_agent_communication: true
 shared_browser: false
+
+# Sequence Settings (optional)
+# When enabled, each task is executed by the listed agents in order.
+sequence:
+  enabled: false
+  steps:
+    - planner
+    - navigator
+    - data_extractor
+  pass_context: true
+  stop_on_failure: true
 ```
+
+When `sequence` is disabled, tasks are queued and assigned to the first available idle agent.
+You can still force a task to run on a specific agent by setting `assigned_agent` on `TaskConfig`.
 
 ### Environment Variables
 
