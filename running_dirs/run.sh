@@ -1,20 +1,73 @@
 #!/bin/bash
 
 # Multiagent Browser-Use Runner
-# Edit the hardcoded parameters below and run this script directly
+# Supports both external arguments and hardcoded parameters
+# External arguments take precedence over hardcoded values
+#
+# Usage:
+#   ./run.sh [--config PATH] [--task "TASK"] [--headless] [--max-steps N] [--log-level LEVEL] [--log-dir DIR]
+#
+# Examples:
+#   ./run.sh --task "Search for Python 3.12 features"
+#   ./run.sh --task "Find news" --headless --max-steps 10
+#   ./run.sh --config custom.yaml --task "Research AI" --log-dir my_logs
 
 # ============================================================
 # HARDCODED PARAMETERS - Edit these for your experiment
 # ============================================================
-CONFIG="configs/multiagent_default.yaml"
-TASK="Search for the latest Python release"
-HEADLESS=false          # Set to true for headless mode
-MAX_STEPS=""            # e.g., "10" or leave empty for config default
-LOG_LEVEL=""            # e.g., "DEBUG", "INFO", "WARNING", "ERROR" or leave empty
-LOG_DIR=""              # e.g., "my_logs" or leave empty for config default
+DEFAULT_CONFIG="configs/multiagent_default.yaml"
+DEFAULT_TASK="Search for the latest Python release"
+DEFAULT_HEADLESS=false          # Set to true for headless mode
+DEFAULT_MAX_STEPS=""            # e.g., "10" or leave empty for config default
+DEFAULT_LOG_LEVEL=""            # e.g., "DEBUG", "INFO", "WARNING", "ERROR" or leave empty
+DEFAULT_LOG_DIR=""              # e.g., "my_logs" or leave empty for script directory
 
 # ============================================================
-# Script Logic - No need to edit below unless changing behavior
+# Parse External Arguments (takes precedence over hardcoded)
+# ============================================================
+CONFIG=""
+TASK=""
+HEADLESS=""
+MAX_STEPS=""
+LOG_LEVEL=""
+LOG_DIR=""
+
+while [[ $# -gt 0 ]]; do
+	case $1 in
+		--config)
+			CONFIG="$2"
+			shift 2
+			;;
+		--task)
+			TASK="$2"
+			shift 2
+			;;
+		--headless)
+			HEADLESS=true
+			shift
+			;;
+		--max-steps)
+			MAX_STEPS="$2"
+			shift 2
+			;;
+		--log-level)
+			LOG_LEVEL="$2"
+			shift 2
+			;;
+		--log-dir)
+			LOG_DIR="$2"
+			shift 2
+			;;
+		*)
+			echo "Unknown argument: $1"
+			echo "Usage: $0 [--config PATH] [--task TASK] [--headless] [--max-steps N] [--log-level LEVEL] [--log-dir DIR]"
+			exit 1
+			;;
+	esac
+done
+
+# ============================================================
+# Apply Defaults (external args > hardcoded > fallback defaults)
 # ============================================================
 
 # Get script directory (this is the experiment directory)
@@ -32,6 +85,21 @@ done
 if [[ ! -f "$PROJECT_ROOT/pyproject.toml" ]]; then
 	echo "Error: Could not find project root (no pyproject.toml found)"
 	exit 1
+fi
+
+# Apply priority: external arg > hardcoded > fallback default
+CONFIG="${CONFIG:-$DEFAULT_CONFIG}"
+TASK="${TASK:-$DEFAULT_TASK}"
+if [[ -z "$HEADLESS" ]]; then
+	HEADLESS="$DEFAULT_HEADLESS"
+fi
+MAX_STEPS="${MAX_STEPS:-$DEFAULT_MAX_STEPS}"
+LOG_LEVEL="${LOG_LEVEL:-$DEFAULT_LOG_LEVEL}"
+LOG_DIR="${LOG_DIR:-$DEFAULT_LOG_DIR}"
+
+# If log_dir is still empty, default to script directory
+if [[ -z "$LOG_DIR" ]]; then
+	LOG_DIR="$SCRIPT_DIR"
 fi
 
 # Resolve relative config path from script directory
