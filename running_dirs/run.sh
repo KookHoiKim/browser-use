@@ -1,97 +1,89 @@
 #!/bin/bash
 
 # Multiagent Browser-Use Runner
-# Basic bash script to run the multiagent orchestrator
+# Edit the hardcoded parameters below and run this script directly
 
-# Default values
+# ============================================================
+# HARDCODED PARAMETERS - Edit these for your experiment
+# ============================================================
 CONFIG="configs/multiagent_default.yaml"
-TASK=""
-HEADLESS=""
-MAX_STEPS=""
-LOG_LEVEL=""
-LOG_DIR=""
+TASK="Search for the latest Python release"
+HEADLESS=false          # Set to true for headless mode
+MAX_STEPS=""            # e.g., "10" or leave empty for config default
+LOG_LEVEL=""            # e.g., "DEBUG", "INFO", "WARNING", "ERROR" or leave empty
+LOG_DIR=""              # e.g., "my_logs" or leave empty for config default
 
-# Help message
-show_help() {
-	cat << EOF
-Usage: ./running_dirs/run.sh [OPTIONS]
+# ============================================================
+# Script Logic - No need to edit below unless changing behavior
+# ============================================================
 
-Options:
-  -c, --config CONFIG       Path to config file (default: configs/multiagent_default.yaml)
-  -t, --task TASK          Task description (required)
-  --headless               Run in headless mode
-  --max-steps STEPS        Maximum number of steps
-  --log-level LEVEL        Log level (DEBUG, INFO, WARNING, ERROR)
-  --log-dir DIR            Custom log directory
-  -h, --help               Show this help message
+# Get script directory (this is the experiment directory)
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-Examples:
-  ./running_dirs/run.sh -t "Search for the latest Python release"
-  ./running_dirs/run.sh -c configs/multiagent_azure.yaml -t "Find laptop prices" --headless
-  ./running_dirs/run.sh -t "Research topic" --log-dir my_logs/ --log-level DEBUG
-
-EOF
-}
-
-# Parse arguments
-while [[ $# -gt 0 ]]; do
-	case $1 in
-		-c|--config)
-			CONFIG="$2"
-			shift 2
-			;;
-		-t|--task)
-			TASK="$2"
-			shift 2
-			;;
-		--headless)
-			HEADLESS="--headless"
-			shift
-			;;
-		--max-steps)
-			MAX_STEPS="--max-steps $2"
-			shift 2
-			;;
-		--log-level)
-			LOG_LEVEL="--log-level $2"
-			shift 2
-			;;
-		--log-dir)
-			LOG_DIR="--log-dir $2"
-			shift 2
-			;;
-		-h|--help)
-			show_help
-			exit 0
-			;;
-		*)
-			echo "Unknown option: $1"
-			show_help
-			exit 1
-			;;
-	esac
+# Find project root by looking for pyproject.toml
+PROJECT_ROOT="$SCRIPT_DIR"
+while [[ "$PROJECT_ROOT" != "/" ]]; do
+	if [[ -f "$PROJECT_ROOT/pyproject.toml" ]]; then
+		break
+	fi
+	PROJECT_ROOT="$(dirname "$PROJECT_ROOT")"
 done
 
-# Check required arguments
-if [ -z "$TASK" ]; then
-	echo "Error: --task is required"
-	show_help
+if [[ ! -f "$PROJECT_ROOT/pyproject.toml" ]]; then
+	echo "Error: Could not find project root (no pyproject.toml found)"
 	exit 1
 fi
 
-# Get script directory and project root
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+# Resolve relative config path from script directory
+if [[ "$CONFIG" != /* ]]; then
+	# If config is relative, try from script dir first, then project root
+	if [[ -f "$SCRIPT_DIR/$CONFIG" ]]; then
+		CONFIG="$SCRIPT_DIR/$CONFIG"
+	elif [[ -f "$PROJECT_ROOT/$CONFIG" ]]; then
+		CONFIG="$PROJECT_ROOT/$CONFIG"
+	fi
+fi
 
-# Change to project root
-cd "$PROJECT_ROOT" || exit 1
+# Build command arguments array
+CMD_ARGS=(
+	"--config" "$CONFIG"
+	"--task" "$TASK"
+)
 
-# Build command
-CMD="uv run python running_dirs/run_multiagent.py --config $CONFIG --task \"$TASK\" $HEADLESS $MAX_STEPS $LOG_LEVEL $LOG_DIR"
+if [[ "$HEADLESS" == true ]]; then
+	CMD_ARGS+=("--headless")
+fi
+
+if [[ -n "$MAX_STEPS" ]]; then
+	CMD_ARGS+=("--max-steps" "$MAX_STEPS")
+fi
+
+if [[ -n "$LOG_LEVEL" ]]; then
+	CMD_ARGS+=("--log-level" "$LOG_LEVEL")
+fi
+
+if [[ -n "$LOG_DIR" ]]; then
+	CMD_ARGS+=("--log-dir" "$LOG_DIR")
+fi
+
+# Find run_multiagent.py relative to script directory
+RUN_SCRIPT="$SCRIPT_DIR/run_multiagent.py"
+if [[ ! -f "$RUN_SCRIPT" ]]; then
+	# Try in running_dirs subdirectory of project root
+	RUN_SCRIPT="$PROJECT_ROOT/running_dirs/run_multiagent.py"
+fi
+
+if [[ ! -f "$RUN_SCRIPT" ]]; then
+	echo "Error: Could not find run_multiagent.py"
+	exit 1
+fi
 
 # Print command for transparency
-echo "Running: $CMD"
+echo "Experiment dir: $SCRIPT_DIR"
+echo "Project root:   $PROJECT_ROOT"
+echo "Running: python $RUN_SCRIPT ${CMD_ARGS[@]}"
 echo ""
 
-# Execute
-eval $CMD
+# Execute from project root (so imports work correctly)
+cd "$PROJECT_ROOT" || exit 1
+python "$RUN_SCRIPT" "${CMD_ARGS[@]}"
