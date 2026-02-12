@@ -80,6 +80,7 @@ class LoggingConfig(BaseModel):
 	save_screenshots: bool = True
 	save_dom_snapshots: bool = True
 	log_level: str = 'INFO'
+	detailed_llm_logging: bool = False  # Enable detailed LLM input/output logging
 
 
 class MultiAgentConfig(BaseModel):
