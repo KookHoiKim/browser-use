@@ -29,6 +29,7 @@ from multiagent.agents.searcher import SearcherAgent
 from multiagent.agents.critic import CriticAgent
 from multiagent.config import MultiAgentConfig, load_config
 from multiagent.logging import RunLogger
+from multiagent.detailed_logging import wrap_llm_with_logging
 
 logger = logging.getLogger('multiagent.orchestrator')
 
@@ -72,19 +73,40 @@ class MultiAgentOrchestrator:
 		self.critic_reject_count: int = 0
 		self.step_number: int = 0
 
+		# Detailed logging directory
+		self.detailed_log_dir = self.run_logger.run_dir / 'detailed_llm_logs'
+		if self.config.logging.detailed_llm_logging:
+			self.detailed_log_dir.mkdir(parents=True, exist_ok=True)
+
 	def _init_agents(self) -> None:
-		"""Initialize advisory agents from config."""
+		"""Initialize advisory agents from config and wrap their LLMs if detailed logging is enabled."""
 		for name, agent_cfg in self.config.agents.items():
 			if not agent_cfg.enabled:
 				continue
+
+			agent = None
 			if name == 'planner':
-				self.planner = PlannerAgent(agent_cfg)
+				agent = PlannerAgent(agent_cfg)
+				self.planner = agent
 			elif name == 'searcher':
-				self.searcher = SearcherAgent(agent_cfg)
+				agent = SearcherAgent(agent_cfg)
+				self.searcher = agent
 			elif name == 'critic':
-				self.critic = CriticAgent(agent_cfg)
+				agent = CriticAgent(agent_cfg)
+				self.critic = agent
 			else:
 				logger.warning(f'Unknown agent type in config: {name!r}, skipping')
+				continue
+
+			# Wrap the agent's LLM with detailed logging if enabled
+			if agent and self.config.logging.detailed_llm_logging:
+				agent.llm = wrap_llm_with_logging(
+					agent.llm,
+					agent_name=name,
+					log_dir=self.detailed_log_dir,
+					step_number=None,  # Will be updated per step
+					enabled=True,
+				)
 
 		assert self.planner is not None, 'Planner agent must be enabled'
 
@@ -174,6 +196,16 @@ class MultiAgentOrchestrator:
 		# Create the underlying browser-use Agent with the planner's LLM
 		planner_llm = create_llm_from_config(self.config.agents['planner'].provider)
 
+		# Wrap the browser-use agent's LLM with detailed logging if enabled
+		if self.config.logging.detailed_llm_logging:
+			planner_llm = wrap_llm_with_logging(
+				planner_llm,
+				agent_name='browser-agent',
+				log_dir=self.detailed_log_dir,
+				step_number=None,  # Will be updated per step
+				enabled=True,
+			)
+
 		agent = Agent(
 			task=self.task,
 			llm=planner_llm,
@@ -193,6 +225,14 @@ class MultiAgentOrchestrator:
 		async def on_step_start(agent_ref: Agent) -> None:
 			"""Hook called before each Agent step - consult advisory agents."""
 			self.step_number = agent_ref.state.n_steps
+
+			# Update step number in all LLM logging wrappers
+			if self.config.logging.detailed_llm_logging:
+				for agent in [self.planner, self.searcher, self.critic]:
+					if agent and hasattr(agent.llm, 'update_step_number'):
+						agent.llm.update_step_number(self.step_number)  # type: ignore
+				if hasattr(agent_ref.llm, 'update_step_number'):
+					agent_ref.llm.update_step_number(self.step_number)  # type: ignore
 
 			state_desc = self._build_state_description(agent_ref)
 			history_summary = self._build_history_summary(agent_ref)
