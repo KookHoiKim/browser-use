@@ -114,6 +114,7 @@ def load_mind2web_dataset(hf_token: str | None = None) -> list[dict[str, Any]]:
 	and provide a token via --hf-token or the HF_TOKEN environment variable.
 
 	Returns a list of dicts with keys: task_id, website, task_description, reference_length.
+	Note: The dataset's 'confirmed_task' key is automatically mapped to 'task_description'.
 	"""
 	try:
 		from datasets import load_dataset
@@ -143,6 +144,11 @@ def load_mind2web_dataset(hf_token: str | None = None) -> list[dict[str, Any]]:
 		data = [dict(row) for row in ds[split_name]]
 	else:
 		data = [dict(row) for row in ds]
+
+	# Normalize keys: the dataset uses 'confirmed_task' but we use 'task_description'
+	for row in data:
+		if 'confirmed_task' in row and 'task_description' not in row:
+			row['task_description'] = row['confirmed_task']
 
 	logger.info(f'Loaded {len(data)} tasks from Online-Mind2Web')
 	return data
