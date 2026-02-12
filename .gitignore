@@ -84,3 +84,8 @@ product_extraction.py
 plot.py
 
 .claude/
+
+# Experiment results (auto-generated)
+results/
+runs/
+*.benchmark_summary.json
