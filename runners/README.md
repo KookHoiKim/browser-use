@@ -24,6 +24,23 @@ python runners/multiagent_runner.py \
 - `--log-level`: Override log level (DEBUG/INFO/WARNING/ERROR)
 - `--log-dir`: Override log directory
 
+
+### `matrix_runner.py`
+Generic runner for matrix-style experiments (prompt/workflow combinational testing).
+
+**Usage** (typically called from experiment `run.sh`):
+```bash
+python runners/matrix_runner.py     --matrix experiments/multiagent_matrix_v1/matrix.yaml     --group smoke     --dry-run
+```
+
+**Arguments**:
+- `--matrix`: Path to matrix definition YAML
+- `--group`: Run group key in matrix config (default: smoke)
+- `--dry-run`: Expand matrix and print plan only
+- `--execute`: Execute all expanded runs
+- `--headless`: Pass headless mode to each expanded run
+- `--max-steps`: Override max_steps for each expanded run
+
 ### `mind2web_runner.py`
 Generic runner for Mind2Web benchmark suite.
 
