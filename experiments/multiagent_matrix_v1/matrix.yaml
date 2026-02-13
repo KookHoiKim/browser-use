@@ -1,0 +1,75 @@
+# Matrix experiment spec for exploring prompt/workflow combinations.
+# Usage:
+#   ./experiments/multiagent_matrix_v1/run.sh
+#   GROUP=full_matrix ./experiments/multiagent_matrix_v1/run.sh
+#   DRY_RUN=true ./experiments/multiagent_matrix_v1/run.sh
+
+# Follow shared baseline defaults first, then override by variants below.
+base_config: shared/configs/multiagent_default.yaml
+generated_config_dir: experiments/multiagent_matrix_v1/generated_configs
+results_dir: results/multiagent_matrix_v1
+
+task_sets:
+  easy_navigation:
+    - "Go to python.org and report the latest Python version shown on homepage."
+    - "Find the top headline on news.ycombinator.com and summarize it in one sentence."
+  form_and_filters:
+    - "Open a shopping site, search for wireless mouse, and return the cheapest in-stock option visible."
+    - "Find a hotel in Seoul for next weekend and list one option with price and rating."
+  multi_hop_research:
+    - "Find one recent article about AI browser agents and extract title, source, and publish date."
+    - "Compare two cloud browser services and provide 3 bullet differences from official docs."
+
+prompt_variants:
+  default:
+    planner_prompt_path: shared/prompts/planner.md
+    searcher_prompt_path: shared/prompts/searcher.md
+    critic_prompt_path: shared/prompts/critic.md
+  decomposition_heavy:
+    planner_prompt_path: experiments/multiagent_matrix_v1/prompts/planner_decomposition.md
+    searcher_prompt_path: shared/prompts/searcher.md
+    critic_prompt_path: shared/prompts/critic.md
+  skeptic_critic:
+    planner_prompt_path: shared/prompts/planner.md
+    searcher_prompt_path: shared/prompts/searcher.md
+    critic_prompt_path: experiments/multiagent_matrix_v1/prompts/critic_skeptical.md
+  fast_search:
+    planner_prompt_path: shared/prompts/planner.md
+    searcher_prompt_path: experiments/multiagent_matrix_v1/prompts/searcher_fast.md
+    critic_prompt_path: shared/prompts/critic.md
+
+workflow_variants:
+  default_triad:
+    planner_enabled: true
+    searcher_enabled: true
+    critic_enabled: true
+    always_use_critic: true
+    searcher_on_first_step: true
+  planner_searcher_only:
+    planner_enabled: true
+    searcher_enabled: true
+    critic_enabled: false
+    always_use_critic: false
+    searcher_on_first_step: true
+  planner_critic_only:
+    planner_enabled: true
+    searcher_enabled: false
+    critic_enabled: true
+    always_use_critic: true
+    searcher_on_first_step: false
+  delayed_searcher_triad:
+    planner_enabled: true
+    searcher_enabled: true
+    critic_enabled: true
+    always_use_critic: true
+    searcher_on_first_step: false
+
+run_groups:
+  smoke:
+    task_set: easy_navigation
+    prompt_variants: [default, decomposition_heavy]
+    workflow_variants: [default_triad, planner_searcher_only]
+  full_matrix:
+    task_set: form_and_filters
+    prompt_variants: [default, decomposition_heavy, skeptic_critic, fast_search]
+    workflow_variants: [default_triad, planner_searcher_only, planner_critic_only, delayed_searcher_triad]

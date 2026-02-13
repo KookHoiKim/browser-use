@@ -9,6 +9,12 @@ Each experiment is self-contained in its own directory with:
 - `run.sh` or `run_benchmark.sh`: Executable script to run the experiment
 - `prompts/` (optional): Custom prompts that override shared prompts
 
+For combinational testing across many prompt/workflow variants, use the shared matrix runner:
+
+```bash
+./experiments/multiagent_matrix_v1/run.sh
+```
+
 ## Available Experiments
 
 ### 1. `baseline_qwen3vl/`
@@ -85,6 +91,24 @@ CONCURRENCY=5 ./run_benchmark.sh
 
 # Test with limited tasks
 MAX_TASKS=10 ./run_benchmark.sh
+```
+
+### 5. `multiagent_matrix_v1/`
+**Purpose**: Run systematic combinations of prompt styles × agent-workflow compositions
+
+**Configuration**:
+- Base config: `shared/configs/multiagent_default.yaml`
+- Prompt variants: default, decomposition-heavy planner, skeptic critic, fast searcher
+- Workflow variants: triad / planner+searcher / planner+critic / delayed searcher
+- Run groups: `smoke` and `full_matrix`
+
+**Run**:
+```bash
+# Preview generated runs/configs
+DRY_RUN=true ./experiments/multiagent_matrix_v1/run.sh
+
+# Execute runs
+GROUP=smoke HEADLESS=true ./experiments/multiagent_matrix_v1/run.sh
 ```
 
 ## Creating a New Experiment
