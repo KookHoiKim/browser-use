@@ -67,7 +67,9 @@ class OrchestratorConfig(BaseModel):
 	searcher_on_first_step: bool = True
 	searcher_mode: Literal['llm_only', 'browser', 'adaptive'] = 'adaptive'
 	always_use_critic: bool = True
+	apply_critic_revision: bool = True
 	force_replan_on_loop: bool = True
+	max_replan_attempts_per_step: int = 1
 	abort_on_critic_reject_count: int = 3
 	use_risk_policy: bool = True
 	risk_low_threshold: int = 2
