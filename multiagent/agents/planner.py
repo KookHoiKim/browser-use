@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import logging
-from typing import Any
 
 from multiagent.agents.base import BaseAgent
+from multiagent.agents.views import PlannerDecision, parse_structured_response
 from multiagent.config import AgentConfig
 
 logger = logging.getLogger(__name__)
@@ -32,11 +31,8 @@ class PlannerAgent(BaseAgent):
 		searcher_summary: str | None = None,
 		critic_feedback: str | None = None,
 		screenshot_b64: str | None = None,
-	) -> str:
-		"""Generate a planning response with the next action to take.
-
-		Returns raw LLM text that the orchestrator will parse into an action.
-		"""
+	) -> PlannerDecision:
+		"""Generate the next-action decision with strict schema parsing."""
 		parts = [
 			f'## Task\n{task}',
 			f'## Step {step_number}',
@@ -54,13 +50,19 @@ class PlannerAgent(BaseAgent):
 		parts.append(
 			'## Instructions\n'
 			'Analyze the current state and decide on exactly ONE action to take.\n'
-			'Respond with a JSON object containing:\n'
-			'- "thinking": your reasoning about what to do\n'
-			'- "action": the action name (from available actions)\n'
-			'- "params": the action parameters as a dict\n'
-			'- "is_done": true if the task is complete, false otherwise\n'
-			'- "success": true/false (only when is_done is true)\n'
-			'- "extracted_content": any content extracted (only when is_done is true)'
+			'Respond with ONLY one JSON object (no markdown, no prose) matching this exact schema:\n'
+			'{\n'
+			'  "thinking": string,\n'
+			'  "action": string,\n'
+			'  "params": object,\n'
+			'  "is_done": boolean,\n'
+			'  "success": boolean | null,\n'
+			'  "extracted_content": string | null\n'
+			'}\n'
+			'Rules:\n'
+			'- Use field names exactly as written.\n'
+			'- If is_done=false, set success=null and extracted_content=null.\n'
+			'- If is_done=true, success must be true/false and extracted_content may contain final output.'
 		)
 
 		user_msg = '\n\n'.join(parts)
@@ -69,4 +71,19 @@ class PlannerAgent(BaseAgent):
 		if screenshot_b64:
 			images = [{'url': f'data:image/png;base64,{screenshot_b64}'}]
 
-		return await self.invoke(user_msg, images=images)
+		response = await self.invoke(user_msg, images=images)
+		parse_error: Exception | None = None
+		try:
+			return parse_structured_response(response, PlannerDecision)
+		except Exception as exc:
+			parse_error = exc
+			logger.warning('Planner response parse failed on first attempt: %s', exc)
+
+		reask_msg = (
+			f'{user_msg}\n\n'
+			'## Validation Error\n'
+			f'Your previous response failed schema validation: {parse_error}.\n'
+			'Return ONLY a corrected JSON object matching the schema exactly.'
+		)
+		reask_response = await self.invoke(reask_msg, images=images)
+		return parse_structured_response(reask_response, PlannerDecision)
