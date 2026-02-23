@@ -27,6 +27,7 @@ from browser_use.browser.views import BrowserStateHistory
 from multiagent.agents.planner import PlannerAgent
 from multiagent.agents.searcher import SearcherAgent, SearcherResult
 from multiagent.agents.critic import CriticAgent
+from multiagent.agents.views import PlannerDecision, CriticVerdictModel
 from multiagent.config import MultiAgentConfig, load_config
 from multiagent.logging import RunLogger
 from multiagent.detailed_logging import wrap_llm_with_logging
@@ -397,7 +398,7 @@ class MultiAgentOrchestrator:
 					searcher_summary = f'Searcher error: {e}'
 
 			# --- Planner (pre-step advisory) ---
-			planner_response: str | None = None
+			planner_response: PlannerDecision | None = None
 			if self.planner is not None:
 				try:
 					planner_response = await self.planner.plan(
@@ -409,12 +410,13 @@ class MultiAgentOrchestrator:
 						searcher_summary=searcher_summary,
 						screenshot_b64=screenshot,
 					)
-					logger.info(f'Step {self.step_number}: Planner responded ({len(planner_response)} chars)')
+					planner_preview = planner_response.model_dump_json()
+					logger.info(f'Step {self.step_number}: Planner responded ({len(planner_preview)} chars)')
 				except Exception as e:
 					logger.error(f'Step {self.step_number}: Planner failed: {e}')
 
 			# --- Critic ---
-			critic_verdict_str: str | None = None
+			critic_verdict: CriticVerdictModel | None = None
 			if (
 				self.critic is not None
 				and self.critic.config.enabled
@@ -422,7 +424,7 @@ class MultiAgentOrchestrator:
 				and planner_response
 			):
 				try:
-					verdict = await self.critic.critique(
+					critic_verdict = await self.critic.critique(
 						task=self.task,
 						state_description=state_desc,
 						planner_response=planner_response,
@@ -431,21 +433,20 @@ class MultiAgentOrchestrator:
 						loop_detected=loop_detected,
 						screenshot_b64=screenshot,
 					)
-					critic_feedback = verdict.feedback
-					critic_verdict_str = verdict.verdict
+					critic_feedback = critic_verdict.feedback
 
-					if verdict.should_abort:
+					if critic_verdict.should_abort:
 						self.critic_reject_count += 1
 						logger.warning(
 							f'Step {self.step_number}: Critic recommends ABORT '
 							f'({self.critic_reject_count}/{self.config.orchestrator.abort_on_critic_reject_count}): '
-							f'{verdict.abort_reason}'
+							f'{critic_verdict.abort_reason}'
 						)
 						if self.critic_reject_count >= self.config.orchestrator.abort_on_critic_reject_count:
 							logger.error('Critic abort threshold reached, stopping agent')
 							agent_ref.state.stopped = True
-					elif verdict.should_revise:
-						logger.info(f'Step {self.step_number}: Critic suggests revision: {verdict.revision}')
+					elif critic_verdict.should_revise:
+						logger.info(f'Step {self.step_number}: Critic suggests revision: {critic_verdict.revision}')
 					else:
 						logger.info(f'Step {self.step_number}: Critic approved')
 
@@ -457,9 +458,9 @@ class MultiAgentOrchestrator:
 			if searcher_summary:
 				advisory_parts.append(f'[Searcher Intel]\n{searcher_summary}')
 			if planner_response:
-				advisory_parts.append(f'[Planner Guidance]\n{planner_response}')
-			if critic_feedback:
-				advisory_parts.append(f'[Critic Feedback ({critic_verdict_str})]\n{critic_feedback}')
+				advisory_parts.append('[Planner Guidance]\n' + planner_response.model_dump_json(indent=2))
+			if critic_feedback and critic_verdict is not None:
+				advisory_parts.append(f'[Critic Feedback ({critic_verdict.verdict})]\n{critic_feedback}')
 
 			self._advisory_context = '\n\n'.join(advisory_parts) if advisory_parts else None
 
@@ -488,12 +489,12 @@ class MultiAgentOrchestrator:
 					'searcher': searcher_summary[:500] if searcher_summary else None,
 					'searcher_sources': searcher_result.sources if searcher_result else None,
 					'searcher_triggers': searcher_triggers or None,
-					'planner': planner_response[:500] if planner_response else None,
-					'critic': critic_feedback[:500] if critic_feedback else None,
+					'planner_typed': planner_response.model_dump(mode='json') if planner_response else None,
+					'critic_typed': critic_verdict.model_dump(mode='json') if critic_verdict else None,
 					'advisory_context_preview': self._advisory_context[:500] if self._advisory_context else None,
 				},
 				loop_detected=loop_detected,
-				critic_verdict=critic_verdict_str,
+				critic_verdict=critic_verdict.verdict if critic_verdict else None,
 				searcher_used=searcher_used,
 				searcher_mode_used=searcher_mode_used,
 				searcher_latency_ms=searcher_latency_ms,
