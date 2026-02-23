@@ -74,6 +74,8 @@ class RunLogger:
 		failure_signal: str | None = None,
 		critic_verdict: str | None = None,
 		searcher_used: bool = False,
+		searcher_mode_used: str | None = None,
+		searcher_latency_ms: int | None = None,
 	) -> None:
 		"""Save a per-step JSON log."""
 		step_data = {
@@ -87,6 +89,8 @@ class RunLogger:
 			'failure_signal': failure_signal,
 			'critic_verdict': critic_verdict,
 			'searcher_used': searcher_used,
+			'searcher_mode_used': searcher_mode_used,
+			'searcher_latency_ms': searcher_latency_ms,
 		}
 
 		step_file = self.steps_dir / f'step_{step_number:04d}.json'

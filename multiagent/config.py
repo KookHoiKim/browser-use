@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -65,6 +65,7 @@ class OrchestratorConfig(BaseModel):
 	loop_detection_window: int = 5  # number of recent actions to check for loops
 	loop_detection_threshold: int = 3  # how many repeats trigger loop detection
 	searcher_on_first_step: bool = True
+	searcher_mode: Literal['llm_only', 'browser', 'adaptive'] = 'adaptive'
 	always_use_critic: bool = True
 	force_replan_on_loop: bool = True
 	abort_on_critic_reject_count: int = 3

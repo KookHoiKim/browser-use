@@ -25,7 +25,7 @@ from browser_use.browser.session import BrowserSession
 from browser_use.browser.views import BrowserStateHistory
 
 from multiagent.agents.planner import PlannerAgent
-from multiagent.agents.searcher import SearcherAgent
+from multiagent.agents.searcher import SearcherAgent, SearcherResult
 from multiagent.agents.critic import CriticAgent
 from multiagent.config import MultiAgentConfig, load_config
 from multiagent.logging import RunLogger
@@ -187,6 +187,73 @@ class MultiAgentOrchestrator:
 		return None
 
 
+
+	def _recent_error_rate(self, agent: Agent, window: int = 5) -> float:
+		"""Compute error ratio for the last N environment steps."""
+		items = agent.history.history[-window:]
+		if not items:
+			return 0.0
+		error_steps = 0
+		for item in items:
+			if any((result.error is not None) for result in item.result):
+				error_steps += 1
+		return error_steps / len(items)
+
+	def _has_info_gap_signal(self, state_desc: str, history_summary: str) -> bool:
+		"""Detect text signals that imply missing information."""
+		blob = f'{state_desc}\n{history_summary}'.lower()
+		keywords = (
+			'unknown',
+			'not sure',
+			'missing',
+			'need more information',
+			'cannot find',
+			'unclear',
+			'no result',
+			'insufficient',
+		)
+		return any(keyword in blob for keyword in keywords)
+
+	def _resolve_searcher_mode(
+		self,
+		agent_ref: Agent,
+		loop_detected: bool,
+		state_desc: str,
+		history_summary: str,
+	) -> tuple[bool, str | None, list[str]]:
+		"""Decide whether to call searcher and which mode to use."""
+		if self.searcher is None or not self.searcher.config.enabled:
+			return False, None, []
+
+		if self.step_number == 1 and self.config.orchestrator.searcher_on_first_step:
+			mode = self.config.orchestrator.searcher_mode
+			return True, ('llm_only' if mode == 'adaptive' else mode), ['first_step']
+
+		mode = self.config.orchestrator.searcher_mode
+		if mode == 'llm_only':
+			return False, None, []
+		if mode == 'browser':
+			if loop_detected:
+				return True, 'browser', ['loop_detected']
+			return False, None, []
+
+		error_rate = self._recent_error_rate(agent_ref)
+		has_info_gap = self._has_info_gap_signal(state_desc, history_summary)
+		triggers: list[str] = []
+		if loop_detected:
+			triggers.append('loop_detected')
+		if error_rate >= 0.4:
+			triggers.append(f'recent_error_rate={error_rate:.2f}')
+		if has_info_gap:
+			triggers.append('info_gap_keywords')
+
+		if not triggers:
+			return False, None, []
+
+		chosen_mode = 'browser' if ('loop_detected' in triggers or error_rate >= 0.4) else 'llm_only'
+		return True, chosen_mode, triggers
+
+
 	def _log_advisory_injection_verification(self) -> None:
 		"""Verify advisory markers appear in browser-agent detailed input logs."""
 		if not self.config.logging.detailed_llm_logging:
@@ -283,31 +350,49 @@ class MultiAgentOrchestrator:
 			}
 
 			searcher_summary: str | None = None
+			searcher_result: SearcherResult | None = None
 			critic_feedback: str | None = None
 			searcher_used = False
+			searcher_mode_used: str | None = None
+			searcher_latency_ms: int | None = None
+			searcher_triggers: list[str] = []
 
 			# --- Searcher ---
-			should_search = (
-				self.searcher is not None
-				and self.searcher.config.enabled
-				and (
-					(self.step_number == 1 and self.config.orchestrator.searcher_on_first_step)
-					or loop_detected
-				)
+			should_search, selected_mode, searcher_triggers = self._resolve_searcher_mode(
+				agent_ref=agent_ref,
+				loop_detected=loop_detected,
+				state_desc=state_desc,
+				history_summary=history_summary,
 			)
 
 			if should_search:
 				assert self.searcher is not None
+				assert selected_mode is not None
 				searcher_used = True
+				searcher_mode_used = selected_mode
+				started = time.perf_counter()
 				try:
-					searcher_summary = await self.searcher.gather_info(
-						task=self.task,
-						state_description=state_desc,
-						step_number=self.step_number,
-						history_summary=history_summary,
+					if selected_mode == 'browser':
+						searcher_result = await self.searcher.search(
+							query=self.task,
+							task_context=f'Step {self.step_number}\n{state_desc}\n\n{history_summary}',
+							browser_profile=BrowserProfile(headless=True),
+						)
+					else:
+						searcher_result = await self.searcher.gather_info(
+							task=self.task,
+							state_description=state_desc,
+							step_number=self.step_number,
+							history_summary=history_summary,
+						)
+					searcher_latency_ms = int((time.perf_counter() - started) * 1000)
+					searcher_summary = searcher_result.to_planner_section()
+					logger.info(
+						f'Step {self.step_number}: Searcher mode={selected_mode} returned ' 
+						f'{len(searcher_summary)} chars in {searcher_latency_ms}ms (triggers={searcher_triggers})'
 					)
-					logger.info(f'Step {self.step_number}: Searcher returned {len(searcher_summary)} chars')
 				except Exception as e:
+					searcher_latency_ms = int((time.perf_counter() - started) * 1000)
 					logger.error(f'Step {self.step_number}: Searcher failed: {e}')
 					searcher_summary = f'Searcher error: {e}'
 
@@ -401,6 +486,8 @@ class MultiAgentOrchestrator:
 				},
 				agent_outputs={
 					'searcher': searcher_summary[:500] if searcher_summary else None,
+					'searcher_sources': searcher_result.sources if searcher_result else None,
+					'searcher_triggers': searcher_triggers or None,
 					'planner': planner_response[:500] if planner_response else None,
 					'critic': critic_feedback[:500] if critic_feedback else None,
 					'advisory_context_preview': self._advisory_context[:500] if self._advisory_context else None,
@@ -408,6 +495,8 @@ class MultiAgentOrchestrator:
 				loop_detected=loop_detected,
 				critic_verdict=critic_verdict_str,
 				searcher_used=searcher_used,
+				searcher_mode_used=searcher_mode_used,
+				searcher_latency_ms=searcher_latency_ms,
 			)
 
 		async def on_step_end(agent_ref: Agent) -> None:
