@@ -3,7 +3,7 @@
 Design:
 - Creates and owns a real browser-use Agent for browser interaction.
 - Before each Agent step, consults advisory agents (Planner/Searcher/Critic).
-- Injects advisory context into the Agent's message history via on_step_start hook.
+- Injects advisory context right before the browser-agent LLM call via on_before_llm_call hook.
 - Delegates actual browser action execution entirely to browser-use Agent.
 - Returns the same AgentHistoryList as Agent.run().
 """
@@ -412,6 +412,7 @@ class MultiAgentOrchestrator:
 
 		# Advisory context to inject into agent steps
 		self._advisory_context: str | None = None
+		self._advisory_context_key: str | None = None
 		self._policy_tokens_total: int = 0
 		run_started = time.perf_counter()
 
@@ -587,18 +588,7 @@ class MultiAgentOrchestrator:
 
 			self._advisory_context = '\n\n'.join(advisory_parts) if advisory_parts else None
 
-			# Inject advisory context into browser-use Agent's step input chain.
-			advisory_injected = False
-			advisory_dedupe_key = f'advisory_step_{self.step_number}'
-			if self._advisory_context:
-				advisory_injected = agent_ref.add_step_context_message(
-					self._advisory_context,
-					dedupe_key=advisory_dedupe_key,
-				)
-				logger.info(
-					f'Step {self.step_number}: advisory context {"injected" if advisory_injected else "deduplicated"} '
-					f'(key={advisory_dedupe_key}, chars={len(self._advisory_context)})'
-				)
+			self._advisory_context_key = f'advisory_step_{self.step_number}' if self._advisory_context else None
 
 			self._policy_tokens_total += policy_tokens_used
 
@@ -607,8 +597,8 @@ class MultiAgentOrchestrator:
 				step_number=self.step_number,
 				agent_inputs={
 					**step_inputs,
-					'advisory_context_key': advisory_dedupe_key if self._advisory_context else None,
-					'advisory_injected': advisory_injected,
+					'advisory_context_key': self._advisory_context_key,
+					'advisory_injected': None,
 				},
 				agent_outputs={
 					'policy_name': risk_policy.name,
@@ -628,6 +618,29 @@ class MultiAgentOrchestrator:
 				searcher_used=searcher_used,
 				searcher_mode_used=searcher_mode_used,
 				searcher_latency_ms=searcher_latency_ms,
+			)
+
+		async def on_before_llm_call(agent_ref: Agent) -> None:
+			"""Inject prepared advisory context after step-state prep and before LLM call."""
+			if not self._advisory_context:
+				return
+
+			advisory_dedupe_key = self._advisory_context_key or f'advisory_step_{self.step_number}'
+			advisory_injected = agent_ref.add_step_context_message(
+				self._advisory_context,
+				dedupe_key=advisory_dedupe_key,
+			)
+			logger.info(
+				f'Step {self.step_number}: advisory context {"injected" if advisory_injected else "deduplicated"} '
+				f'(key={advisory_dedupe_key}, chars={len(self._advisory_context)})'
+			)
+
+			self.run_logger.log_step(
+				step_number=self.step_number,
+				agent_inputs={
+					'advisory_context_key': advisory_dedupe_key,
+					'advisory_injected': advisory_injected,
+				},
 			)
 
 		async def on_step_end(agent_ref: Agent) -> None:
@@ -681,6 +694,7 @@ class MultiAgentOrchestrator:
 			result: AgentHistoryList = await agent.run(
 				max_steps=max_steps,
 				on_step_start=on_step_start,
+				on_before_llm_call=on_before_llm_call,
 				on_step_end=on_step_end,
 			)
 

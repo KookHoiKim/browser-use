@@ -427,6 +427,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 		# Initialize history
 		self.history = AgentHistoryList(history=[], usage=None)
+		self._on_before_llm_call: AgentHookFunc | None = None
 
 		# Initialize agent directory
 		import time
@@ -1133,6 +1134,9 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 	@observe_debug(ignore_input=True, name='get_next_action')
 	async def _get_next_action(self, browser_state_summary: BrowserStateSummary) -> None:
 		"""Execute LLM interaction with retry logic and handle callbacks"""
+		if self._on_before_llm_call is not None:
+			await self._on_before_llm_call(self)
+
 		input_messages = self._message_manager.get_messages()
 		self.logger.debug(
 			f'🤖 Step {self.state.n_steps}: Calling LLM with {len(input_messages)} messages (model: {self.llm.model})...'
@@ -2379,6 +2383,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		max_steps: int,
 		step_info: AgentStepInfo,
 		on_step_start: AgentHookFunc | None = None,
+		on_before_llm_call: AgentHookFunc | None = None,
 		on_step_end: AgentHookFunc | None = None,
 	) -> bool:
 		"""
@@ -2399,6 +2404,8 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		self.logger.debug(f'🚶 Starting step {step + 1}/{max_steps}...')
 
 		try:
+			self._on_before_llm_call = on_before_llm_call
+
 			await asyncio.wait_for(
 				self.step(step_info),
 				timeout=self.settings.step_timeout,
@@ -2411,6 +2418,9 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			await self._demo_mode_log(error_msg, 'error', {'step': step + 1})
 			self.state.consecutive_failures += 1
 			self.state.last_result = [ActionResult(error=error_msg)]
+
+		finally:
+			self._on_before_llm_call = None
 
 		if on_step_end is not None:
 			await on_step_end(self)
@@ -2441,6 +2451,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		self,
 		max_steps: int = 500,
 		on_step_start: AgentHookFunc | None = None,
+		on_before_llm_call: AgentHookFunc | None = None,
 		on_step_end: AgentHookFunc | None = None,
 	) -> AgentHistoryList[AgentStructuredOutput]:
 		"""Execute the task with maximum number of steps"""
@@ -2543,7 +2554,14 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 					break
 
 				step_info = AgentStepInfo(step_number=current_step, max_steps=max_steps)
-				is_done = await self._execute_step(current_step, max_steps, step_info, on_step_start, on_step_end)
+				is_done = await self._execute_step(
+					current_step,
+					max_steps,
+					step_info,
+					on_step_start,
+					on_before_llm_call,
+					on_step_end,
+				)
 
 				if is_done:
 					# Agent has marked the task as done
@@ -3979,12 +3997,20 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		self,
 		max_steps: int = 500,
 		on_step_start: AgentHookFunc | None = None,
+		on_before_llm_call: AgentHookFunc | None = None,
 		on_step_end: AgentHookFunc | None = None,
 	) -> AgentHistoryList[AgentStructuredOutput]:
 		"""Synchronous wrapper around the async run method for easier usage without asyncio."""
 		import asyncio
 
-		return asyncio.run(self.run(max_steps=max_steps, on_step_start=on_step_start, on_step_end=on_step_end))
+		return asyncio.run(
+			self.run(
+				max_steps=max_steps,
+				on_step_start=on_step_start,
+				on_before_llm_call=on_before_llm_call,
+				on_step_end=on_step_end,
+			)
+		)
 
 	def detect_variables(self) -> dict[str, DetectedVariable]:
 		"""Detect reusable variables in agent history"""
