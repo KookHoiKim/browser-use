@@ -271,6 +271,8 @@ class AgentState(BaseModel):
 
 	# Loop detection state
 	loop_detector: ActionLoopDetector = Field(default_factory=ActionLoopDetector)
+	# Per-step injected context dedupe keys
+	injected_context_keys: set[str] = Field(default_factory=set)
 
 
 @dataclass

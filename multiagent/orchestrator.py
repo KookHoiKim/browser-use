@@ -186,6 +186,41 @@ class MultiAgentOrchestrator:
 					pass
 		return None
 
+
+	def _log_advisory_injection_verification(self) -> None:
+		"""Verify advisory markers appear in browser-agent detailed input logs."""
+		if not self.config.logging.detailed_llm_logging:
+			return
+
+		browser_logs = sorted(self.detailed_log_dir.glob('step_*_browser-agent_call_*.json'))
+		if not browser_logs:
+			logger.warning('Advisory verification: no browser-agent detailed logs found')
+			return
+
+		found_planner = False
+		found_critic = False
+		for log_path in browser_logs:
+			try:
+				payload = json.loads(log_path.read_text(encoding='utf-8'))
+			except Exception as exc:
+				logger.warning(f'Advisory verification: failed to parse {log_path.name}: {exc}')
+				continue
+
+			for msg in payload.get('messages', []):
+				if msg.get('role') != 'user':
+					continue
+				content = msg.get('content')
+				if isinstance(content, str):
+					if '[Planner Guidance]' in content:
+						found_planner = True
+					if '[Critic Feedback' in content:
+						found_critic = True
+
+		logger.info(
+			'Advisory verification (browser-agent input): '
+			f'[Planner Guidance]={found_planner}, [Critic Feedback]={found_critic}, files_scanned={len(browser_logs)}'
+		)
+
 	async def run(self) -> AgentHistoryList:
 		"""Execute the task through multi-agent orchestration.
 
@@ -343,14 +378,32 @@ class MultiAgentOrchestrator:
 
 			self._advisory_context = '\n\n'.join(advisory_parts) if advisory_parts else None
 
+			# Inject advisory context into browser-use Agent's step input chain.
+			advisory_injected = False
+			advisory_dedupe_key = f'advisory_step_{self.step_number}'
+			if self._advisory_context:
+				advisory_injected = agent_ref.add_step_context_message(
+					self._advisory_context,
+					dedupe_key=advisory_dedupe_key,
+				)
+				logger.info(
+					f'Step {self.step_number}: advisory context {"injected" if advisory_injected else "deduplicated"} '
+					f'(key={advisory_dedupe_key}, chars={len(self._advisory_context)})'
+				)
+
 			# Log step data
 			self.run_logger.log_step(
 				step_number=self.step_number,
-				agent_inputs=step_inputs,
+				agent_inputs={
+					**step_inputs,
+					'advisory_context_key': advisory_dedupe_key if self._advisory_context else None,
+					'advisory_injected': advisory_injected,
+				},
 				agent_outputs={
 					'searcher': searcher_summary[:500] if searcher_summary else None,
 					'planner': planner_response[:500] if planner_response else None,
 					'critic': critic_feedback[:500] if critic_feedback else None,
+					'advisory_context_preview': self._advisory_context[:500] if self._advisory_context else None,
 				},
 				loop_detected=loop_detected,
 				critic_verdict=critic_verdict_str,
@@ -410,6 +463,8 @@ class MultiAgentOrchestrator:
 				on_step_start=on_step_start,
 				on_step_end=on_step_end,
 			)
+
+			self._log_advisory_injection_verification()
 
 			# Save run summary
 			self.run_logger.log_summary({
