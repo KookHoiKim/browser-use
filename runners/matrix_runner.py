@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import statistics
 import subprocess
 from pathlib import Path
 
@@ -37,6 +38,7 @@ class WorkflowVariant(BaseModel):
     critic_enabled: bool = True
     always_use_critic: bool = True
     searcher_on_first_step: bool = True
+    use_risk_policy: bool = False
 
 
 class RunGroup(BaseModel):
@@ -103,11 +105,56 @@ def apply_variant(
 
     config['orchestrator']['always_use_critic'] = workflow_variant.always_use_critic
     config['orchestrator']['searcher_on_first_step'] = workflow_variant.searcher_on_first_step
+    config['orchestrator']['use_risk_policy'] = workflow_variant.use_risk_policy
 
     config['logging']['experiment_name'] = run_id
     config['logging']['run_dir_base'] = results_dir
     return config
 
+
+
+def _find_run_summary(project_root: Path, results_dir: str, run_id: str) -> Path | None:
+    results_path = project_root / results_dir
+    candidates = sorted(results_path.glob(f'*_{run_id}/summary.json'))
+    return candidates[-1] if candidates else None
+
+
+def _build_aggregate_summary(records: list[dict[str, object]]) -> dict[str, object]:
+    by_variant: dict[str, list[dict[str, object]]] = {}
+    for record in records:
+        variant = str(record['workflow_variant'])
+        by_variant.setdefault(variant, []).append(record)
+
+    def _avg(values: list[float]) -> float:
+        return round(statistics.fmean(values), 4) if values else 0.0
+
+    summary: dict[str, object] = {'variants': {}}
+    for variant, rows in by_variant.items():
+        success_values = [1.0 if bool(r.get('is_successful')) else 0.0 for r in rows]
+        steps_values = [float(r.get('total_steps', 0) or 0) for r in rows]
+        token_values = [float(r.get('estimated_policy_tokens_total', 0) or 0) for r in rows]
+        wall_values = [float(r.get('wall_time_seconds', 0) or 0) for r in rows]
+        summary['variants'][variant] = {
+            'num_runs': len(rows),
+            'success_rate': _avg(success_values),
+            'avg_step': _avg(steps_values),
+            'avg_token': _avg(token_values),
+            'avg_wall_time_sec': _avg(wall_values),
+        }
+
+    triad = summary['variants'].get('default_triad') if isinstance(summary.get('variants'), dict) else None
+    risk = summary['variants'].get('risk_policy_adaptive') if isinstance(summary.get('variants'), dict) else None
+    if triad and risk:
+        summary['ab_compare'] = {
+            'baseline': 'default_triad',
+            'candidate': 'risk_policy_adaptive',
+            'delta_success_rate': round(float(risk['success_rate']) - float(triad['success_rate']), 4),
+            'delta_avg_step': round(float(risk['avg_step']) - float(triad['avg_step']), 4),
+            'delta_avg_token': round(float(risk['avg_token']) - float(triad['avg_token']), 4),
+            'delta_avg_wall_time_sec': round(float(risk['avg_wall_time_sec']) - float(triad['avg_wall_time_sec']), 4),
+        }
+
+    return summary
 
 def run_command(command: list[str], cwd: Path) -> int:
     result = subprocess.run(command, cwd=cwd, check=False)
@@ -157,6 +204,7 @@ def main() -> None:
                         'run_id': run_id,
                         'task': task,
                         'config_path': str(config_path.relative_to(project_root)),
+                        'workflow_variant': workflow_name,
                     }
                 )
 
@@ -194,6 +242,26 @@ def main() -> None:
 
     if failed_runs:
         raise SystemExit(f'{failed_runs} runs failed.')
+
+    summary_records: list[dict[str, object]] = []
+    for run in run_manifest:
+        summary_path = _find_run_summary(project_root, matrix.results_dir, run['run_id'])
+        if summary_path is None:
+            continue
+        payload = load_yaml(summary_path) if summary_path.suffix in ('.yaml', '.yml') else json.loads(summary_path.read_text(encoding='utf-8'))
+        summary_records.append({
+            'run_id': run['run_id'],
+            'workflow_variant': run['workflow_variant'],
+            'is_successful': payload.get('is_successful'),
+            'total_steps': payload.get('total_steps'),
+            'estimated_policy_tokens_total': payload.get('estimated_policy_tokens_total', 0),
+            'wall_time_seconds': payload.get('wall_time_seconds', 0),
+        })
+
+    aggregate = _build_aggregate_summary(summary_records)
+    aggregate_path = generated_config_dir / f'{args.group}_summary.json'
+    aggregate_path.write_text(json.dumps(aggregate, ensure_ascii=False, indent=2), encoding='utf-8')
+    print(f'Aggregate summary: {aggregate_path.relative_to(project_root)}')
 
 
 if __name__ == '__main__':

@@ -69,6 +69,15 @@ class OrchestratorConfig(BaseModel):
 	always_use_critic: bool = True
 	force_replan_on_loop: bool = True
 	abort_on_critic_reject_count: int = 3
+	use_risk_policy: bool = True
+	risk_low_threshold: int = 2
+	risk_high_threshold: int = 6
+	policy_call_budget_low: int = 1
+	policy_call_budget_medium: int = 2
+	policy_call_budget_high: int = 3
+	policy_token_budget_low: int = 4096
+	policy_token_budget_medium: int = 6144
+	policy_token_budget_high: int = 8192
 
 
 class LoggingConfig(BaseModel):
