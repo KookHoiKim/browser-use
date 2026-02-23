@@ -207,10 +207,10 @@ jq 'select(.success == false)' detailed_llm_logs/*.json
 
 각 step에서 advisory 메시지는 다음 순서로 실행 모델 입력에 반영됩니다.
 
-1. `MultiAgentOrchestrator.on_step_start()`에서 Searcher/Planner/Critic 결과를 취합해 `self._advisory_context`를 생성합니다.
-2. `Agent.add_step_context_message(...)`를 통해 browser-use `message_manager`의 step context에 append합니다.
-3. `dedupe_key=advisory_step_{n}`로 같은 step에서 중복 주입을 차단합니다.
-4. 상세 로그(`runs/.../detailed_llm_logs/*browser-agent*.json`)의 user message에서 `[Planner Guidance]`, `[Critic Feedback]` 존재 여부를 검증할 수 있습니다.
+1. `MultiAgentOrchestrator.on_step_start()`에서 Searcher/Planner/Critic 결과를 취합해 `self._advisory_context`를 생성하고, dedupe key(`advisory_step_{n}`)를 준비합니다.
+2. browser-use Agent가 `prepare_step_state()`/`create_state_messages()`를 마친 뒤, `on_before_llm_call` 훅에서 `Agent.add_step_context_message(...)`를 호출해 advisory를 step context에 주입합니다.
+3. `dedupe_key=advisory_step_{n}`로 같은 step에서 중복 주입을 차단하며, step 시작 시 `injected_context_keys`가 clear되어 step 간 충돌을 방지합니다.
+4. 상세 로그(`runs/.../detailed_llm_logs/*browser-agent*.json`)와 orchestrator 검증 로그에서 `[Planner Guidance]`, `[Critic Feedback]` 존재 여부를 확인할 수 있습니다.
 
 ## 구현 세부사항
 
