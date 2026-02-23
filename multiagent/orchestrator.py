@@ -462,6 +462,10 @@ class MultiAgentOrchestrator:
 			searcher_summary: str | None = None
 			searcher_result: SearcherResult | None = None
 			critic_feedback: str | None = None
+			revision_applied = False
+			replan_attempts = 0
+			attempt_limit = self.config.orchestrator.max_replan_attempts_per_step
+			final_planner_action_source = 'original'
 			searcher_used = False
 			searcher_mode_used: str | None = None
 			searcher_latency_ms: int | None = None
@@ -571,6 +575,75 @@ class MultiAgentOrchestrator:
 							agent_ref.state.stopped = True
 					elif critic_verdict.should_revise:
 						logger.info(f'Step {self.step_number}: Critic suggests revision: {critic_verdict.revision}')
+
+						if self.config.orchestrator.apply_critic_revision:
+							for attempt in range(1, attempt_limit + 1):
+								if policy_calls_used >= risk_policy.max_calls or policy_tokens_used >= risk_policy.max_tokens:
+									logger.warning(
+										f'Step {self.step_number}: Replan skipped due to risk-policy budget limits '
+										f'(attempt={attempt}/{attempt_limit})'
+									)
+									break
+
+								replan_attempts = attempt
+								try:
+									replanned_response = await self.planner.plan(
+										task=self.task,
+										state_description=state_desc,
+										action_space=action_space,
+										step_number=self.step_number,
+										history_summary=history_summary,
+										searcher_summary=searcher_summary,
+										critic_feedback=(
+											f'{critic_feedback}\n\nRequested revision: {critic_verdict.revision}'
+											if critic_feedback
+											else critic_verdict.revision
+										),
+										screenshot_b64=screenshot,
+									)
+									replanned_preview = replanned_response.model_dump_json()
+									policy_calls_used += 1
+									policy_tokens_used += max(1, len(replanned_preview) // 4)
+									planner_response = replanned_response
+									revision_applied = True
+									final_planner_action_source = 'replanned'
+									logger.info(
+										f'Step {self.step_number}: Replan succeeded '
+										f'(attempt={attempt}/{attempt_limit}, chars={len(replanned_preview)})'
+									)
+									break
+								except Exception as replan_error:
+									logger.error(
+										f'Step {self.step_number}: Replan failed '
+										f'(attempt={attempt}/{attempt_limit}): {replan_error}'
+									)
+
+						else:
+							logger.info(
+								f'Step {self.step_number}: apply_critic_revision=false; using original planner action'
+							)
+
+						if not revision_applied:
+							if planner_response is None:
+								logger.error(
+									f'Step {self.step_number}: No planner action available after revision request; stopping step'
+								)
+								agent_ref.state.stopped = True
+							elif attempt_limit <= 0:
+								logger.warning(
+									f'Step {self.step_number}: Replan disabled (max_replan_attempts_per_step={attempt_limit}); '
+									'falling back to original planner action'
+								)
+							elif replan_attempts >= attempt_limit:
+								logger.warning(
+									f'Step {self.step_number}: Replan attempts exhausted '
+									f'({replan_attempts}/{attempt_limit}); falling back to original planner action'
+								)
+							else:
+								logger.warning(
+									f'Step {self.step_number}: Replan not applied due to budget or planner failure; '
+									'falling back to original planner action'
+								)
 					else:
 						logger.info(f'Step {self.step_number}: Critic approved')
 
@@ -611,6 +684,9 @@ class MultiAgentOrchestrator:
 					'searcher_triggers': searcher_triggers or None,
 					'planner_typed': planner_response.model_dump(mode='json') if planner_response else None,
 					'critic_typed': critic_verdict.model_dump(mode='json') if critic_verdict else None,
+					'revision_applied': revision_applied,
+					'replan_attempts': replan_attempts,
+					'final_planner_action_source': final_planner_action_source,
 					'advisory_context_preview': self._advisory_context[:500] if self._advisory_context else None,
 				},
 				loop_detected=loop_detected,

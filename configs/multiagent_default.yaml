@@ -45,6 +45,8 @@ orchestrator:
   searcher_on_first_step: true
   searcher_mode: adaptive
   always_use_critic: true
+  apply_critic_revision: true
+  max_replan_attempts_per_step: 1
   force_replan_on_loop: true
   abort_on_critic_reject_count: 3
 
