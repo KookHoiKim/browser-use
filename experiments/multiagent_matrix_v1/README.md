@@ -40,7 +40,7 @@ GROUP=full_matrix HEADLESS=true ./experiments/multiagent_matrix_v1/run.sh
 1. `DRY_RUN=true`로 조합과 생성 config 확인
 2. `smoke` 그룹으로 최소 검증
 3. `full_matrix`로 본 실험 수행
-4. 결과에서 성공률/평균 step/critic reject/시간 비교
+4. 결과에서 성공률/평균 step/평균 토큰/평균 wall-time 및 A/B 비교 확인
 
 ## 확장 포인트
 
@@ -52,3 +52,13 @@ GROUP=full_matrix HEADLESS=true ./experiments/multiagent_matrix_v1/run.sh
   - 마지막 단계에서만 critic 호출
   - N-step마다 critic 호출
   - 도메인 유형별 searcher 동적 on/off
+
+
+## Risk-policy variant
+
+- `risk_policy_adaptive`: step별 risk score 기반으로 정책을 전환합니다.
+  - low: planner only
+  - medium: planner + critic
+  - high: planner + searcher + critic
+- 실행 후 `generated_configs/<group>_summary.json`에 workflow variant별 집계와
+  `default_triad` vs `risk_policy_adaptive` A/B delta가 기록됩니다.

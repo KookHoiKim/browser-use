@@ -35,6 +35,39 @@ from multiagent.detailed_logging import wrap_llm_with_logging
 logger = logging.getLogger('multiagent.orchestrator')
 
 
+
+
+class OrchestratorState:
+	"""Runtime orchestration state used for risk-scored policy routing."""
+
+	def __init__(self) -> None:
+		self.loop_detected: bool = False
+		self.recent_error_count: int = 0
+		self.no_progress_steps: int = 0
+		self.risk_score: int = 0
+
+	def compute_risk_score(self) -> int:
+		"""Compute an integer risk score from recent execution signals."""
+		score = 0
+		if self.loop_detected:
+			score += 4
+		score += min(self.recent_error_count, 5)
+		score += min(self.no_progress_steps, 5)
+		self.risk_score = score
+		return score
+
+
+class RiskPolicyDecision:
+	"""Per-step policy decision with enabled advisors and per-step budgets."""
+
+	def __init__(self, name: str, use_searcher: bool, use_critic: bool, max_calls: int, max_tokens: int) -> None:
+		self.name = name
+		self.use_searcher = use_searcher
+		self.use_critic = use_critic
+		self.max_calls = max_calls
+		self.max_tokens = max_tokens
+
+
 class MultiAgentOrchestrator:
 	"""Planner-centric orchestrator: one environment step -> one action.
 
@@ -73,6 +106,7 @@ class MultiAgentOrchestrator:
 		self.recent_actions: deque[str] = deque(maxlen=self.config.orchestrator.loop_detection_window)
 		self.critic_reject_count: int = 0
 		self.step_number: int = 0
+		self.state = OrchestratorState()
 
 		# Detailed logging directory
 		self.detailed_log_dir = self.run_logger.run_dir / 'detailed_llm_logs'
@@ -200,6 +234,60 @@ class MultiAgentOrchestrator:
 				error_steps += 1
 		return error_steps / len(items)
 
+	def _recent_error_count(self, agent: Agent, window: int = 5) -> int:
+		"""Count steps with errors in the recent window."""
+		items = agent.history.history[-window:]
+		if not items:
+			return 0
+		return sum(1 for item in items if any((result.error is not None) for result in item.result))
+
+	def _recent_no_progress_steps(self, agent: Agent, window: int = 5) -> int:
+		"""Count recent steps where no meaningful progress was observed."""
+		items = agent.history.history[-window:]
+		if not items:
+			return 0
+		no_progress = 0
+		for item in items:
+			if not item.result:
+				no_progress += 1
+				continue
+			last = item.result[-1]
+			if last.is_done:
+				continue
+			if last.error:
+				no_progress += 1
+				continue
+			if not (last.extracted_content or '').strip():
+				no_progress += 1
+		return no_progress
+
+	def _select_risk_policy(self, risk_score: int) -> RiskPolicyDecision:
+		"""Select advisor policy and per-step budgets from risk score."""
+		cfg = self.config.orchestrator
+		if risk_score >= cfg.risk_high_threshold:
+			return RiskPolicyDecision(
+				name='high',
+				use_searcher=True,
+				use_critic=True,
+				max_calls=cfg.policy_call_budget_high,
+				max_tokens=cfg.policy_token_budget_high,
+			)
+		if risk_score >= cfg.risk_low_threshold:
+			return RiskPolicyDecision(
+				name='medium',
+				use_searcher=False,
+				use_critic=True,
+				max_calls=cfg.policy_call_budget_medium,
+				max_tokens=cfg.policy_token_budget_medium,
+			)
+		return RiskPolicyDecision(
+			name='low',
+			use_searcher=False,
+			use_critic=False,
+			max_calls=cfg.policy_call_budget_low,
+			max_tokens=cfg.policy_token_budget_low,
+		)
+
 	def _has_info_gap_signal(self, state_desc: str, history_summary: str) -> bool:
 		"""Detect text signals that imply missing information."""
 		blob = f'{state_desc}\n{history_summary}'.lower()
@@ -324,6 +412,8 @@ class MultiAgentOrchestrator:
 
 		# Advisory context to inject into agent steps
 		self._advisory_context: str | None = None
+		self._policy_tokens_total: int = 0
+		run_started = time.perf_counter()
 
 		async def on_step_start(agent_ref: Agent) -> None:
 			"""Hook called before each Agent step - consult advisory agents."""
@@ -343,11 +433,29 @@ class MultiAgentOrchestrator:
 			screenshot = self._get_screenshot_b64(agent_ref)
 			loop_detected = self._detect_loop()
 
+			self.state.loop_detected = loop_detected
+			self.state.recent_error_count = self._recent_error_count(agent_ref)
+			self.state.no_progress_steps = self._recent_no_progress_steps(agent_ref)
+			risk_score = self.state.compute_risk_score()
+			risk_policy = self._select_risk_policy(risk_score) if self.config.orchestrator.use_risk_policy else RiskPolicyDecision(
+				name='legacy',
+				use_searcher=True,
+				use_critic=self.config.orchestrator.always_use_critic,
+				max_calls=999,
+				max_tokens=999999,
+			)
+			policy_calls_used = 0
+			policy_tokens_used = 0
+
 			# Log step inputs
 			step_inputs: dict[str, Any] = {
 				'step': self.step_number,
 				'state': state_desc[:500],
 				'loop_detected': loop_detected,
+				'risk_score': risk_score,
+				'risk_policy': risk_policy.name,
+				'recent_error_count': self.state.recent_error_count,
+				'no_progress_steps': self.state.no_progress_steps,
 			}
 
 			searcher_summary: str | None = None
@@ -366,7 +474,7 @@ class MultiAgentOrchestrator:
 				history_summary=history_summary,
 			)
 
-			if should_search:
+			if should_search and risk_policy.use_searcher and policy_calls_used < risk_policy.max_calls and policy_tokens_used < risk_policy.max_tokens:
 				assert self.searcher is not None
 				assert selected_mode is not None
 				searcher_used = True
@@ -388,6 +496,8 @@ class MultiAgentOrchestrator:
 						)
 					searcher_latency_ms = int((time.perf_counter() - started) * 1000)
 					searcher_summary = searcher_result.to_planner_section()
+					policy_calls_used += 1
+					policy_tokens_used += max(1, len(searcher_summary) // 4)
 					logger.info(
 						f'Step {self.step_number}: Searcher mode={selected_mode} returned ' 
 						f'{len(searcher_summary)} chars in {searcher_latency_ms}ms (triggers={searcher_triggers})'
@@ -396,10 +506,14 @@ class MultiAgentOrchestrator:
 					searcher_latency_ms = int((time.perf_counter() - started) * 1000)
 					logger.error(f'Step {self.step_number}: Searcher failed: {e}')
 					searcher_summary = f'Searcher error: {e}'
+			elif should_search and not risk_policy.use_searcher:
+				logger.info(f'Step {self.step_number}: Risk policy={risk_policy.name} skipped searcher')
+			elif should_search:
+				logger.info(f'Step {self.step_number}: Searcher skipped due to policy budget limits')
 
 			# --- Planner (pre-step advisory) ---
 			planner_response: PlannerDecision | None = None
-			if self.planner is not None:
+			if self.planner is not None and policy_calls_used < risk_policy.max_calls and policy_tokens_used < risk_policy.max_tokens:
 				try:
 					planner_response = await self.planner.plan(
 						task=self.task,
@@ -411,9 +525,13 @@ class MultiAgentOrchestrator:
 						screenshot_b64=screenshot,
 					)
 					planner_preview = planner_response.model_dump_json()
+					policy_calls_used += 1
+					policy_tokens_used += max(1, len(planner_preview) // 4)
 					logger.info(f'Step {self.step_number}: Planner responded ({len(planner_preview)} chars)')
 				except Exception as e:
 					logger.error(f'Step {self.step_number}: Planner failed: {e}')
+			elif self.planner is not None:
+				logger.warning(f'Step {self.step_number}: Planner skipped due to risk-policy budget limits')
 
 			# --- Critic ---
 			critic_verdict: CriticVerdictModel | None = None
@@ -421,6 +539,9 @@ class MultiAgentOrchestrator:
 				self.critic is not None
 				and self.critic.config.enabled
 				and self.config.orchestrator.always_use_critic
+				and risk_policy.use_critic
+				and policy_calls_used < risk_policy.max_calls
+				and policy_tokens_used < risk_policy.max_tokens
 				and planner_response
 			):
 				try:
@@ -434,6 +555,8 @@ class MultiAgentOrchestrator:
 						screenshot_b64=screenshot,
 					)
 					critic_feedback = critic_verdict.feedback
+					policy_calls_used += 1
+					policy_tokens_used += max(1, len((critic_feedback or '')) // 4)
 
 					if critic_verdict.should_abort:
 						self.critic_reject_count += 1
@@ -477,6 +600,8 @@ class MultiAgentOrchestrator:
 					f'(key={advisory_dedupe_key}, chars={len(self._advisory_context)})'
 				)
 
+			self._policy_tokens_total += policy_tokens_used
+
 			# Log step data
 			self.run_logger.log_step(
 				step_number=self.step_number,
@@ -486,6 +611,11 @@ class MultiAgentOrchestrator:
 					'advisory_injected': advisory_injected,
 				},
 				agent_outputs={
+					'policy_name': risk_policy.name,
+					'policy_calls_used': policy_calls_used,
+					'policy_calls_budget': risk_policy.max_calls,
+					'policy_tokens_used_est': policy_tokens_used,
+					'policy_tokens_budget': risk_policy.max_tokens,
 					'searcher': searcher_summary[:500] if searcher_summary else None,
 					'searcher_sources': searcher_result.sources if searcher_result else None,
 					'searcher_triggers': searcher_triggers or None,
@@ -557,6 +687,7 @@ class MultiAgentOrchestrator:
 			self._log_advisory_injection_verification()
 
 			# Save run summary
+			wall_time_seconds = time.perf_counter() - run_started
 			self.run_logger.log_summary({
 				'task': self.task,
 				'total_steps': len(result.history),
@@ -568,6 +699,9 @@ class MultiAgentOrchestrator:
 				'searcher_calls': self.searcher.call_count if self.searcher else 0,
 				'critic_calls': self.critic.call_count if self.critic else 0,
 				'critic_reject_count': self.critic_reject_count,
+				'risk_policy_enabled': self.config.orchestrator.use_risk_policy,
+				'estimated_policy_tokens_total': self._policy_tokens_total,
+				'wall_time_seconds': wall_time_seconds,
 			})
 
 			logger.info(

@@ -63,13 +63,20 @@ workflow_variants:
     critic_enabled: true
     always_use_critic: true
     searcher_on_first_step: false
+  risk_policy_adaptive:
+    planner_enabled: true
+    searcher_enabled: true
+    critic_enabled: true
+    always_use_critic: true
+    searcher_on_first_step: true
+    use_risk_policy: true
 
 run_groups:
   smoke:
     task_set: easy_navigation
     prompt_variants: [default, decomposition_heavy]
-    workflow_variants: [default_triad, planner_searcher_only]
+    workflow_variants: [default_triad, risk_policy_adaptive]
   full_matrix:
     task_set: form_and_filters
     prompt_variants: [default, decomposition_heavy, skeptic_critic, fast_search]
-    workflow_variants: [default_triad, planner_searcher_only, planner_critic_only, delayed_searcher_triad]
+    workflow_variants: [default_triad, risk_policy_adaptive, planner_searcher_only, planner_critic_only, delayed_searcher_triad]
