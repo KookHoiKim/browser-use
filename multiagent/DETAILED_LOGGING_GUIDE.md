@@ -169,6 +169,10 @@ jq -r '.response.completion' detailed_llm_logs/*searcher*.json
 # Planner가 받은 입력 (searcher 정보 포함)
 jq -r '.messages[] | select(.role=="user") | .content' \
   detailed_llm_logs/step_0001_planner*.json
+
+# Browser-agent 입력에 advisory 컨텍스트가 실제 주입되었는지 확인
+jq -r '.messages[] | select(.role=="user") | .content' \
+  detailed_llm_logs/step_0001_browser-agent*.json | rg "\[Planner Guidance\]|\[Critic Feedback"
 ```
 
 ### 3. 토큰 사용량 분석
@@ -198,6 +202,15 @@ jq 'select(.success == false)' detailed_llm_logs/*.json
 - 디버깅이 필요할 때만 활성화
 - 프로덕션 환경에서는 비활성화
 - 정기적으로 오래된 run 디렉토리 정리
+
+## Advisory Context 주입 흐름
+
+각 step에서 advisory 메시지는 다음 순서로 실행 모델 입력에 반영됩니다.
+
+1. `MultiAgentOrchestrator.on_step_start()`에서 Searcher/Planner/Critic 결과를 취합해 `self._advisory_context`를 생성합니다.
+2. `Agent.add_step_context_message(...)`를 통해 browser-use `message_manager`의 step context에 append합니다.
+3. `dedupe_key=advisory_step_{n}`로 같은 step에서 중복 주입을 차단합니다.
+4. 상세 로그(`runs/.../detailed_llm_logs/*browser-agent*.json`)의 user message에서 `[Planner Guidance]`, `[Critic Feedback]` 존재 여부를 검증할 수 있습니다.
 
 ## 구현 세부사항
 

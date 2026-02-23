@@ -1089,6 +1089,9 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			sensitive_data=self.sensitive_data,
 		)
 
+		# Deduplication keys are tracked per step; reset them after step-state preparation.
+		self.state.injected_context_keys.clear()
+
 		await self._maybe_compact_messages(step_info)
 
 		self._message_manager.create_state_messages(
@@ -3881,6 +3884,20 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		if getattr(self.llm, '_verified_api_keys', None) is True or CONFIG.SKIP_LLM_API_KEY_VERIFICATION:
 			setattr(self.llm, '_verified_api_keys', True)
 			return True
+
+
+	def add_step_context_message(self, message: str, dedupe_key: str | None = None) -> bool:
+		"""Add a user context message for the current step with optional deduplication."""
+		if not message:
+			return False
+
+		if dedupe_key is not None:
+			if dedupe_key in self.state.injected_context_keys:
+				return False
+			self.state.injected_context_keys.add(dedupe_key)
+
+		self._message_manager._add_context_message(UserMessage(content=message))
+		return True
 
 	@property
 	def message_manager(self) -> MessageManager:
