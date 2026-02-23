@@ -1,22 +1,42 @@
-"""Searcher agent - gathers information by browsing in an isolated context."""
+"""Searcher agent - gathers information via LLM or browsing in an isolated context."""
 
 from __future__ import annotations
 
 import logging
-from typing import Any
-
+from dataclasses import dataclass
 from browser_use.agent.service import Agent
 from browser_use.agent.views import AgentHistoryList
 from browser_use.browser.session import BrowserSession
 from browser_use.browser.profile import BrowserProfile
-from browser_use.llm.base import BaseChatModel
-
 from multiagent.agents.base import BaseAgent
 from multiagent.config import AgentConfig
-from multiagent.providers.base import create_llm_from_config
 from multiagent.providers.proxy_scope import proxy_scope
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SearcherResult:
+	"""Structured search intelligence passed to the planner."""
+
+	mode_used: str
+	query: str
+	summary: str
+	sources: list[str]
+	evidence: list[str]
+	raw_output: str
+
+	def to_planner_section(self) -> str:
+		"""Render result in sectioned format for planner consumption."""
+		source_lines = [f'- {url}' for url in self.sources] or ['- (none)']
+		evidence_lines = [f'- {item}' for item in self.evidence] or ['- (none)']
+		return (
+			f'### Searcher Mode\n{self.mode_used}\n\n'
+			f'### Query\n{self.query}\n\n'
+			f'### Summary\n{self.summary}\n\n'
+			+ '### Sources\n' + '\n'.join(source_lines) + '\n\n'
+			+ '### Evidence\n' + '\n'.join(evidence_lines)
+		)
 
 
 class SearcherAgent(BaseAgent):
@@ -36,7 +56,7 @@ class SearcherAgent(BaseAgent):
 		task_context: str,
 		max_steps: int = 8,
 		browser_profile: BrowserProfile | None = None,
-	) -> str:
+	) -> SearcherResult:
 		"""Run a short browsing sub-task to gather information.
 
 		Creates an isolated BrowserSession, runs a mini browser-use Agent,
@@ -74,7 +94,7 @@ class SearcherAgent(BaseAgent):
 			# Extract the final result
 			final = result.final_result()
 			if final:
-				return final
+				return self._build_structured_result(mode_used='browser', query=query, output=final)
 
 			# Fallback: collect any extracted content from history
 			contents = []
@@ -84,13 +104,14 @@ class SearcherAgent(BaseAgent):
 						contents.append(action_result.extracted_content)
 
 			if contents:
-				return '\n\n'.join(contents)
+				combined = '\n\n'.join(contents)
+				return self._build_structured_result(mode_used='browser', query=query, output=combined)
 
-			return 'Searcher could not find relevant information.'
+			return self._build_structured_result(mode_used='browser', query=query, output='Searcher could not find relevant information.')
 
 		except Exception as e:
 			logger.error(f'Searcher failed: {e}')
-			return f'Searcher encountered an error: {e}'
+			return self._build_structured_result(mode_used='browser', query=query, output=f'Searcher encountered an error: {e}')
 
 		finally:
 			try:
@@ -98,13 +119,43 @@ class SearcherAgent(BaseAgent):
 			except Exception:
 				pass
 
+	@staticmethod
+	def _extract_urls(text: str) -> list[str]:
+		"""Extract unique URLs from freeform text."""
+		import re
+
+		matches = re.findall(r"https?://[^\s)\]}>\"']+", text)
+		urls: list[str] = []
+		for url in matches:
+			cleaned = url.rstrip('.,;')
+			if cleaned not in urls:
+				urls.append(cleaned)
+		return urls
+
+	def _build_structured_result(self, mode_used: str, query: str, output: str) -> SearcherResult:
+		"""Convert freeform model output into a structured SearcherResult."""
+		urls = self._extract_urls(output)
+		evidence = [line.strip('-*• ').strip() for line in output.splitlines() if line.strip().startswith(('-', '*', '•'))]
+		if not evidence:
+			evidence = [seg.strip() for seg in output.split('\n') if seg.strip()][:5]
+		summary = output.strip().split('\n\n')[0][:800] or 'No summary provided.'
+		return SearcherResult(
+			mode_used=mode_used,
+			query=query,
+			summary=summary,
+			sources=urls[:10],
+			evidence=evidence[:8],
+			raw_output=output,
+		)
+
+
 	async def gather_info(
 		self,
 		task: str,
 		state_description: str,
 		step_number: int,
 		history_summary: str,
-	) -> str:
+	) -> SearcherResult:
 		"""Quick LLM-only information gathering without browsing.
 
 		Used for lightweight queries where browsing isn't needed.
@@ -120,4 +171,5 @@ class SearcherAgent(BaseAgent):
 			f'- Suggested URLs or search queries if applicable\n'
 			f'Respond in a structured format.'
 		)
-		return await self.invoke(user_msg)
+		response = await self.invoke(user_msg)
+		return self._build_structured_result(mode_used='llm_only', query=task, output=response)
