@@ -134,15 +134,11 @@ if [[ -n "$LOG_DIR" ]]; then
 	CMD_ARGS+=("--log-dir" "$LOG_DIR")
 fi
 
-# Find run_multiagent.py relative to script directory
-RUN_SCRIPT="$SCRIPT_DIR/run_multiagent.py"
-if [[ ! -f "$RUN_SCRIPT" ]]; then
-	# Try in running_dirs subdirectory of project root
-	RUN_SCRIPT="$PROJECT_ROOT/running_dirs/run_multiagent.py"
-fi
+# Canonical multi-agent runner path
+RUN_SCRIPT="$PROJECT_ROOT/runners/multiagent_runner.py"
 
 if [[ ! -f "$RUN_SCRIPT" ]]; then
-	echo "Error: Could not find run_multiagent.py"
+	echo "Error: Could not find runners/multiagent_runner.py"
 	exit 1
 fi
 

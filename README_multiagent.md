@@ -34,20 +34,30 @@ An OS-Symphony-inspired multi-agent orchestration layer on top of browser-use. A
 
 ## Quick Start
 
+## Official Command
+
+Use this as the canonical entrypoint from the repository root:
+
+```bash
+python runners/multiagent_runner.py \
+  --config configs/multiagent_default.yaml \
+  --task "Search for the latest Python release and extract the version number"
+```
+
 ```bash
 # From the browser-use repo root
-python scripts/run_multiagent.py \
+python runners/multiagent_runner.py \
   --config configs/multiagent_default.yaml \
   --task "Search for the latest Python release and extract the version number"
 
 # With headless browser
-python scripts/run_multiagent.py \
+python runners/multiagent_runner.py \
   --config configs/multiagent_default.yaml \
   --task "Find the current Bitcoin price" \
   --headless
 
 # Override max steps and log level
-python scripts/run_multiagent.py \
+python runners/multiagent_runner.py \
   --config configs/multiagent_default.yaml \
   --task "Navigate to example.com and extract the main heading" \
   --max-steps 20 \
@@ -160,7 +170,7 @@ runs/multiagent/20260210_143022_default/
 ## Upstream Modifications
 
 **None.** This implementation uses only:
-- New files under `multiagent/`, `configs/`, `prompts/`, `scripts/`
+- New files under `multiagent/`, `configs/`, `prompts/`, `runners/`
 - browser-use's public API: `Agent`, `BrowserSession`, `BrowserProfile`, LLM providers
 - `Agent.run()` hooks: `on_step_start` and `on_step_end` callbacks
 
@@ -194,6 +204,6 @@ prompts/
 ├── searcher.md
 └── critic.md
 
-scripts/
-└── run_multiagent.py          # CLI entrypoint
+runners/
+└── multiagent_runner.py       # canonical CLI entrypoint
 ```
