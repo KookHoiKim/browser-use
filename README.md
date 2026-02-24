@@ -158,6 +158,13 @@ browser-use close                       # Close browser
 
 The CLI keeps the browser running between commands for fast iteration. See [CLI docs](browser_use/skill_cli/README.md) for all commands.
 
+### Multi-agent orchestration (official command)
+
+```bash
+python runners/multiagent_runner.py --config configs/multiagent_default.yaml --task "..."
+```
+See [README_multiagent.md](README_multiagent.md) for details.
+
 ### Claude Code Skill
 
 For [Claude Code](https://claude.ai/code), install the skill to enable AI-assisted browser automation:

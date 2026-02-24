@@ -2,16 +2,15 @@
 """CLI entrypoint for multi-agent browser-use orchestration.
 
 Usage:
-    python running_dirs/run_multiagent.py --config configs/multiagent_default.yaml --task "Search for the latest Python release"
-    python running_dirs/run_multiagent.py --config configs/multiagent_azure.yaml --task "Find the price of ..." --headless
-    python running_dirs/run_multiagent.py --config configs/multiagent_default.yaml --task "..." --log-dir my_logs/
+    python runners/multiagent_runner.py --config configs/multiagent_default.yaml --task "Search for the latest Python release"
+    python runners/multiagent_runner.py --config configs/multiagent_azure.yaml --task "Find the price of ..." --headless
+    python runners/multiagent_runner.py --config configs/multiagent_default.yaml --task "..." --log-dir my_logs/
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import logging
 import sys
 from pathlib import Path

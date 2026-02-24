@@ -35,7 +35,7 @@ browser-use/
 ### If you were using `run_multiagent.py`:
 ```bash
 # Old way:
-python running_dirs/run_multiagent.py --config configs/multiagent_default.yaml --task "..."
+python runners/multiagent_runner.py --config configs/multiagent_default.yaml --task "..."
 
 # New way:
 cd experiments/baseline_qwen3vl
